@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/blacktop/fm-rs"><img alt="Logo" src="./docs/logo.svg"/></a>
+  <a href="https://github.com/blacktop/fm-rs"><img alt="Logo" src="./docs/logo.svg" height="400"/></a>
   <h1 align="center">fm-rs</h1>
   <h4><p align="center">Rust bindings for Apple’s <code>FoundationModels.framework</code></p></h4>
   <p align="center">
