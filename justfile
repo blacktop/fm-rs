@@ -104,6 +104,25 @@ tag version:
 version:
     @grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/'
 
+# Bump patch version, commit, tag, and push (requires cargo-release: cargo install cargo-release)
+bump: bump-patch
+
+# Bump patch version (0.1.0 -> 0.1.1)
+bump-patch:
+    cargo release patch --execute --no-publish
+
+# Bump minor version (0.1.0 -> 0.2.0)
+bump-minor:
+    cargo release minor --execute --no-publish
+
+# Bump major version (0.1.0 -> 1.0.0)
+bump-major:
+    cargo release major --execute --no-publish
+
+# Preview what bump would do (dry-run)
+bump-dry level="patch":
+    cargo release {{ level }}
+
 # Update dependencies
 update:
     cargo update
