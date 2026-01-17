@@ -1,0 +1,125 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # e.g., v0.1.0
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # e.g., v0.1.0-beta.1
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Verify the tag matches Cargo.toml version
+  verify:
+    name: Verify Release
+    runs-on: macos-26
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Verify Cargo.toml version matches tag
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: Cargo.toml version ($CARGO_VERSION) doesn't match tag (v$TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version verified: $CARGO_VERSION"
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Run tests before publish
+        run: cargo test --all-features
+
+  # Publish fm-rs-derive first (no Swift dependency)
+  publish-derive:
+    name: Publish fm-rs-derive
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish fm-rs-derive
+        run: cargo publish -p fm-rs-derive
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      # Wait for crates.io to index the new version
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+  # Publish fm-rs (depends on fm-rs-derive)
+  publish-fm-rs:
+    name: Publish fm-rs
+    needs: [verify, publish-derive]
+    runs-on: macos-26  # Requires macOS 26 for FoundationModels.framework
+    environment: crates-io
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish fm-rs
+        run: cargo publish -p fm-rs --all-features
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  # Create GitHub Release
+  release:
+    name: Create Release
+    needs: [verify, publish-fm-rs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ```toml
+            [dependencies]
+            fm-rs = "${{ needs.verify.outputs.version }}"
+            ```
+
+            ## Documentation
+
+            - [docs.rs/fm-rs](https://docs.rs/fm-rs/${{ needs.verify.outputs.version }})
+            - [crates.io/crates/fm-rs](https://crates.io/crates/fm-rs)

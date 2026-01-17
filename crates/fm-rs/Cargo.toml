@@ -1,0 +1,40 @@
+[package]
+name = "fm-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["blacktop"]
+description = "Rust bindings for Apple's FoundationModels.framework"
+readme = "../../README.md"
+documentation = "https://docs.rs/fm-rs"
+keywords = ["apple", "foundation-models", "ai", "llm", "apple-intelligence"]
+categories = ["api-bindings", "os::macos-apis"]
+
+[lib]
+name = "fm_rs"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+fm-rs-derive = { workspace = true, optional = true }
+
+[dev-dependencies]
+reqwest.workspace = true
+
+[features]
+default = []
+derive = ["fm-rs-derive"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+targets = ["aarch64-apple-darwin", "aarch64-apple-ios"]
+rustc-args = ["--cfg", "docsrs"]
+all-features = true
+
+[package.metadata.release]
+allow-branch = ["main"]

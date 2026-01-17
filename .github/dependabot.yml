@@ -1,0 +1,47 @@
+version: 2
+updates:
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "rust-toolchain"
+    # Optional: ignore pre-release channels
+    ignore:
+      - dependency-name: "rust-toolchain"
+        update-types: ["version-update:semver-pre-release"]
+    rebase-strategy: "auto"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+  - package-ecosystem: "cargo"
+    directory: "/" # Location of Cargo.toml
+    schedule:
+      interval: "weekly"
+    # Optional: ignore pre-release versions
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-pre-release"]
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "cargo"
+    # Group all Cargo deps into one weekly PR
+    groups:
+      all-cargo:
+        patterns:
+          - "*"
+    rebase-strategy: "auto"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
