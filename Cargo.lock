@@ -114,7 +114,7 @@ checksum = "8591b0bcc8a98a64310a2fae1bb3e9b8564dd10e381e6e28010fde8e8e8568db"
 
 [[package]]
 name = "fm-rs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "fm-rs-derive",
  "reqwest",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "fm-rs-derive"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "proc-macro2",
  "quote",
