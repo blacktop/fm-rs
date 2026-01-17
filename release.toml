@@ -1,0 +1,11 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+
+# Use a single unified tag for the whole workspace
+shared-version = true
+
+# Tag format: v0.1.0 instead of crate-name-v0.1.0
+tag-name = "v{{version}}"
+
+# Single commit message for workspace releases
+consolidate-commits = true

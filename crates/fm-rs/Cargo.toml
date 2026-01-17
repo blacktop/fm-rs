@@ -32,9 +32,9 @@ derive = ["fm-rs-derive"]
 workspace = true
 
 [package.metadata.docs.rs]
-targets = ["aarch64-apple-darwin", "aarch64-apple-ios"]
-rustc-args = ["--cfg", "docsrs"]
 all-features = true
+default-target = "aarch64-apple-darwin"
+targets = ["aarch64-apple-darwin", "aarch64-apple-ios"]
 
 [package.metadata.release]
 allow-branch = ["main"]

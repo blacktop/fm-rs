@@ -147,8 +147,11 @@ pub trait Generable {
 #[cfg(feature = "derive")]
 pub use fm_rs_derive::Generable;
 
-/// Re-export `serde_json` so derive output doesn't require a direct dependency.
-pub use serde_json;
+/// Re-export `serde_json` so derive macro output doesn't require a direct dependency.
+///
+/// Named `__serde_json` to avoid namespace conflicts with serde's internal derive paths.
+#[doc(hidden)]
+pub use serde_json as __serde_json;
 
 // Re-export public API
 pub use crate::context::{

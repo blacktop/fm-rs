@@ -119,7 +119,7 @@ fn derive_generable_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenS
 
     let tokens = quote! {
         impl #crate_path::Generable for #ident {
-            fn schema() -> #crate_path::serde_json::Value {
+            fn schema() -> #crate_path::__serde_json::Value {
                 #schema_body
             }
         }
@@ -332,14 +332,14 @@ fn schema_for_struct(
 
     let required_values = required_fields
         .iter()
-        .map(|name| quote!(#crate_path::serde_json::Value::String(#name.to_string())));
+        .map(|name| quote!(#crate_path::__serde_json::Value::String(#name.to_string())));
 
     if let Some(desc) = &container.description {
         let desc_lit = LitStr::new(desc, proc_macro2::Span::call_site());
         container_inserts.push(quote! {
             schema.insert(
                 "description".to_string(),
-                #crate_path::serde_json::Value::String(#desc_lit.to_string())
+                #crate_path::__serde_json::Value::String(#desc_lit.to_string())
             );
         });
     }
@@ -348,30 +348,30 @@ fn schema_for_struct(
         container_inserts.push(quote! {
             schema.insert(
                 "example".to_string(),
-                #crate_path::serde_json::json!(#example_tokens)
+                #crate_path::__serde_json::json!(#example_tokens)
             );
         });
     }
 
     Ok(quote! {
-        let mut schema = #crate_path::serde_json::Map::new();
+        let mut schema = #crate_path::__serde_json::Map::new();
         schema.insert(
             "type".to_string(),
-            #crate_path::serde_json::Value::String("object".to_string())
+            #crate_path::__serde_json::Value::String("object".to_string())
         );
-        let mut properties = #crate_path::serde_json::Map::new();
+        let mut properties = #crate_path::__serde_json::Map::new();
         #(#property_inserts)*
         schema.insert(
             "properties".to_string(),
-            #crate_path::serde_json::Value::Object(properties)
+            #crate_path::__serde_json::Value::Object(properties)
         );
         let mut required = Vec::new();
         #(required.push(#required_values);)*
         if !required.is_empty() {
-            schema.insert("required".to_string(), #crate_path::serde_json::Value::Array(required));
+            schema.insert("required".to_string(), #crate_path::__serde_json::Value::Array(required));
         }
         #(#container_inserts)*
-        #crate_path::serde_json::Value::Object(schema)
+        #crate_path::__serde_json::Value::Object(schema)
     })
 }
 
@@ -404,14 +404,14 @@ fn schema_for_enum(
 
     let variant_values = variants
         .iter()
-        .map(|name| quote!(#crate_path::serde_json::Value::String(#name.to_string())));
+        .map(|name| quote!(#crate_path::__serde_json::Value::String(#name.to_string())));
 
     if let Some(desc) = &container.description {
         let desc_lit = LitStr::new(desc, proc_macro2::Span::call_site());
         container_inserts.push(quote! {
             schema.insert(
                 "description".to_string(),
-                #crate_path::serde_json::Value::String(#desc_lit.to_string())
+                #crate_path::__serde_json::Value::String(#desc_lit.to_string())
             );
         });
     }
@@ -420,21 +420,21 @@ fn schema_for_enum(
         container_inserts.push(quote! {
             schema.insert(
                 "example".to_string(),
-                #crate_path::serde_json::json!(#example_tokens)
+                #crate_path::__serde_json::json!(#example_tokens)
             );
         });
     }
 
     Ok(quote! {
-        let mut schema = #crate_path::serde_json::Map::new();
+        let mut schema = #crate_path::__serde_json::Map::new();
         let variants = vec![#(#variant_values),*];
         schema.insert(
             "type".to_string(),
-            #crate_path::serde_json::Value::String("string".to_string())
+            #crate_path::__serde_json::Value::String("string".to_string())
         );
-        schema.insert("enum".to_string(), #crate_path::serde_json::Value::Array(variants));
+        schema.insert("enum".to_string(), #crate_path::__serde_json::Value::Array(variants));
         #(#container_inserts)*
-        #crate_path::serde_json::Value::Object(schema)
+        #crate_path::__serde_json::Value::Object(schema)
     })
 }
 
@@ -526,7 +526,7 @@ fn schema_for_type(ty: &Type, attrs: &FieldAttrs, crate_path: &Path) -> syn::Res
         let base = quote!(<#ty as #crate_path::Generable>::schema());
         quote!({
             let mut schema = #base;
-            if let #crate_path::serde_json::Value::Object(ref mut map) = schema {
+            if let #crate_path::__serde_json::Value::Object(ref mut map) = schema {
                 #(#entries)*
             }
             schema
@@ -544,9 +544,9 @@ fn schema_object_expr(
     entries: Vec<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
     quote!({
-        let mut map = #crate_path::serde_json::Map::new();
+        let mut map = #crate_path::__serde_json::Map::new();
         #(#entries)*
-        #crate_path::serde_json::Value::Object(map)
+        #crate_path::__serde_json::Value::Object(map)
     })
 }
 
@@ -554,7 +554,7 @@ fn schema_type_entry(crate_path: &Path, ty: &str) -> proc_macro2::TokenStream {
     let lit = LitStr::new(ty, proc_macro2::Span::call_site());
     schema_entry(
         "type",
-        quote!(#crate_path::serde_json::Value::String(#lit.to_string())),
+        quote!(#crate_path::__serde_json::Value::String(#lit.to_string())),
     )
 }
 
@@ -566,13 +566,13 @@ fn schema_entry(key: &str, value_expr: proc_macro2::TokenStream) -> proc_macro2:
 fn schema_string_insert(crate_path: &Path, key: &str, value: &str) -> proc_macro2::TokenStream {
     let key_lit = LitStr::new(key, proc_macro2::Span::call_site());
     let val_lit = LitStr::new(value, proc_macro2::Span::call_site());
-    quote!(map.insert(#key_lit.to_string(), #crate_path::serde_json::Value::String(#val_lit.to_string()));)
+    quote!(map.insert(#key_lit.to_string(), #crate_path::__serde_json::Value::String(#val_lit.to_string()));)
 }
 
 fn schema_value_insert(crate_path: &Path, key: &str, value: &Lit) -> proc_macro2::TokenStream {
     let key_lit = LitStr::new(key, proc_macro2::Span::call_site());
     let value_tokens = value.to_token_stream();
-    quote!(map.insert(#key_lit.to_string(), #crate_path::serde_json::json!(#value_tokens));)
+    quote!(map.insert(#key_lit.to_string(), #crate_path::__serde_json::json!(#value_tokens));)
 }
 
 fn add_attr_entries(
@@ -610,7 +610,7 @@ fn add_attr_entries(
     if attrs.nullable {
         entries.push(schema_entry(
             "nullable",
-            quote!(#crate_path::serde_json::Value::Bool(true)),
+            quote!(#crate_path::__serde_json::Value::Bool(true)),
         ));
     }
 }
