@@ -84,6 +84,12 @@ pub struct ContextUsage {
 pub struct CompactionConfig {
     /// Estimated tokens per chunk sent to the summarizer.
     pub chunk_tokens: usize,
+    /// Maximum tokens allowed for the rolling summary.
+    ///
+    /// As chunks are processed, the running summary can grow unbounded.
+    /// This limit ensures the summary is truncated to avoid exceeding
+    /// the model's context window during multi-chunk compaction.
+    pub max_summary_tokens: usize,
     /// Instructions for the summarizer session.
     pub instructions: String,
     /// Options used for summary generation.
@@ -96,6 +102,7 @@ impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
             chunk_tokens: 800,
+            max_summary_tokens: 400,
             instructions: "Summarize the conversation for future context. Preserve user intent, key facts, decisions, and open questions. Keep the summary concise."
                 .to_string(),
             summary_options: GenerationOptions::builder()
@@ -155,7 +162,12 @@ pub fn compact_transcript(
 
     for chunk in chunks {
         let session = Session::with_instructions(model, &config.instructions)?;
-        let prompt = build_summary_prompt(&summary, &chunk);
+        let prompt = build_summary_prompt(
+            &summary,
+            &chunk,
+            config.max_summary_tokens,
+            config.chars_per_token,
+        );
         let response = session.respond(&prompt, &config.summary_options)?;
         summary = response.into_content();
     }
@@ -183,14 +195,38 @@ pub fn estimate_tokens(text: &str, chars_per_token: usize) -> usize {
     chars.div_ceil(denom)
 }
 
-fn build_summary_prompt(current_summary: &str, chunk: &str) -> String {
+fn build_summary_prompt(
+    current_summary: &str,
+    chunk: &str,
+    max_summary_tokens: usize,
+    chars_per_token: usize,
+) -> String {
     if current_summary.trim().is_empty() {
         format!(
             "Summarize the following conversation transcript:\n\n{chunk}\n\nReturn a concise summary."
         )
     } else {
+        // Truncate summary if it exceeds the token limit to prevent unbounded growth
+        let summary_tokens = estimate_tokens(current_summary, chars_per_token);
+        let truncated_summary = if summary_tokens > max_summary_tokens {
+            // Keep the end of the summary to preserve recent context
+            let max_chars = max_summary_tokens.saturating_mul(chars_per_token.max(1));
+            let char_count = current_summary.chars().count();
+            if char_count > max_chars {
+                let skip = char_count - max_chars;
+                format!(
+                    "..{}",
+                    current_summary.chars().skip(skip).collect::<String>()
+                )
+            } else {
+                current_summary.to_string()
+            }
+        } else {
+            current_summary.to_string()
+        };
+
         format!(
-            "Update the summary with new conversation content.\n\nCurrent summary:\n{current_summary}\n\nNew transcript chunk:\n{chunk}\n\nReturn the updated concise summary."
+            "Update the summary with new conversation content.\n\nCurrent summary:\n{truncated_summary}\n\nNew transcript chunk:\n{chunk}\n\nReturn the updated concise summary."
         )
     }
 }
