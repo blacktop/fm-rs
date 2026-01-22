@@ -16,7 +16,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Pin maturin version for reproducible builds
-  MATURIN_VERSION: '1.8'
+  MATURIN_VERSION: '1.11.5'
 
 jobs:
   # Verify the tag matches pyproject.toml version
