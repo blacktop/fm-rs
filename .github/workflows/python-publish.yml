@@ -3,8 +3,8 @@ name: Publish Python Package
 on:
   push:
     tags:
-      - 'python-v[0-9]*.[0-9]*.[0-9]*'      # e.g., python-v0.1.0
-      - 'python-v[0-9]*.[0-9]*.[0-9]*-*'    # e.g., python-v0.1.0-beta.1
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # e.g., v0.1.0
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # e.g., v0.1.0-beta.1
   workflow_dispatch:
     inputs:
       publish:
@@ -32,32 +32,33 @@ jobs:
       - name: Determine version and publish status
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/python-v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/python-v}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            VERSION=$(grep '^version' bindings/python/pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+            # Read from Cargo.toml (source of truth for dynamic versioning)
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Check publish conditions
         id: check
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/python-v* ]] || [[ "${{ github.event.inputs.publish }}" == "true" ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] || [[ "${{ github.event.inputs.publish }}" == "true" ]]; then
             echo "should_publish=true" >> $GITHUB_OUTPUT
           else
             echo "should_publish=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Verify pyproject.toml version matches tag
-        if: startsWith(github.ref, 'refs/tags/python-v')
+      - name: Verify Cargo.toml version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          PYPROJECT_VERSION=$(grep '^version' bindings/python/pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           TAG_VERSION="${{ steps.version.outputs.version }}"
-          if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: pyproject.toml version ($PYPROJECT_VERSION) doesn't match tag (python-v$TAG_VERSION)"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: Cargo.toml version ($CARGO_VERSION) doesn't match tag (v$TAG_VERSION)"
             exit 1
           fi
-          echo "Version verified: $PYPROJECT_VERSION"
+          echo "Version verified: $CARGO_VERSION"
 
   # Build macOS ARM64 wheel (Apple Silicon only - FoundationModels.framework requirement)
   build-macos-arm64:
@@ -147,56 +148,22 @@ jobs:
           verbose: true
           print-hash: true
 
-  # Create GitHub Release
-  release:
-    name: Create Release
+  # Upload artifacts to existing GitHub Release (created by Rust publish workflow)
+  upload-release-assets:
+    name: Upload Release Assets
     needs: [verify, publish]
-    if: startsWith(github.ref, 'refs/tags/python-v')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Python ${{ needs.verify.outputs.version }}
-          generate_release_notes: true
           files: dist/*
-          body: |
-            ## Python Bindings for fm-rs
-
-            ### Installation
-
-            ```bash
-            pip install fm-rs==${{ needs.verify.outputs.version }}
-            ```
-
-            ### Requirements
-
-            - macOS 26.0+ (Tahoe)
-            - Apple Silicon (ARM64) only
-            - Apple Intelligence enabled
-
-            ### Documentation
-
-            - [PyPI](https://pypi.org/project/fm-rs/${{ needs.verify.outputs.version }}/)
-            - [GitHub](https://github.com/blacktop/fm-rs/tree/main/bindings/python)
-
-            ### Example
-
-            ```python
-            import fm
-
-            model = fm.SystemLanguageModel()
-            session = fm.Session(model, instructions="You are helpful.")
-            response = session.respond("Hello!")
-            print(response.content)
-            ```

@@ -112,14 +112,21 @@ jobs:
         with:
           generate_release_notes: true
           body: |
-            ## Installation
+            ## Rust
 
             ```toml
             [dependencies]
             fm-rs = "${{ needs.verify.outputs.version }}"
             ```
 
+            ## Python
+
+            ```bash
+            pip install fm-rs==${{ needs.verify.outputs.version }}
+            ```
+
             ## Documentation
 
             - [docs.rs/fm-rs](https://docs.rs/fm-rs/${{ needs.verify.outputs.version }})
             - [crates.io/crates/fm-rs](https://crates.io/crates/fm-rs)
+            - [pypi.org/project/fm-rs](https://pypi.org/project/fm-rs/${{ needs.verify.outputs.version }}/)
