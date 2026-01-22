@@ -28,3 +28,7 @@ target
 *.swiftdoc
 *.swiftsourceinfo
 ~*.swift
+
+# Python bindings
+__pycache__
+uv.lock

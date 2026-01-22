@@ -1,0 +1,14 @@
+# Configuration for fm-python build
+# Sets rpath for Swift runtime libraries required by fm-rs
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+    "-C", "link-arg=-Wl,-rpath,@loader_path/../../../",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+    "-C", "link-arg=-Wl,-rpath,@loader_path/../../../",
+]

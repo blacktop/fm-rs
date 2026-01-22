@@ -77,3 +77,42 @@ jobs:
 
       - name: Test derive crate
         run: cargo test -p fm-rs-derive
+
+  # Python bindings (requires macOS 26 for FoundationModels.framework)
+  python-bindings:
+    name: Python Bindings
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check clippy
+        run: cargo clippy -p fm-python --all-features -- -D warnings
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          args: --release --out dist
+          maturin-version: '1.8'
+
+      - name: Test wheel installation
+        run: |
+          pip install bindings/python/dist/*.whl
+          DYLD_LIBRARY_PATH=/usr/lib/swift python -c "import fm; print(f'Imported: {fm.SystemLanguageModel}')"
+
+      - name: Run Python tests
+        working-directory: bindings/python
+        run: |
+          pip install pytest
+          DYLD_LIBRARY_PATH=/usr/lib/swift pytest tests/ -v

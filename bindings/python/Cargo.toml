@@ -1,0 +1,20 @@
+[package]
+name = "fm-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python bindings for fm-rs (Apple FoundationModels.framework)"
+
+[lib]
+name = "fm"
+crate-type = ["cdylib"]
+
+[dependencies]
+fm-rs.workspace = true
+serde_json.workspace = true
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
+
+[lints]
+workspace = true

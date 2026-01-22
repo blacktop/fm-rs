@@ -1,0 +1,168 @@
+# fm-rs Python bindings justfile
+# Run `just` to see available recipes
+
+set shell := ["bash", "-cu"]
+
+# Swift runtime path for macOS
+swift_lib := "DYLD_LIBRARY_PATH=/usr/lib/swift"
+
+# Default recipe - show help
+default:
+    @just --list
+
+# ===== Development =====
+
+# Sync dependencies and build in development mode
+build:
+    uv sync
+    uv run maturin develop
+
+# Build in release mode
+build-release:
+    uv sync
+    uv run maturin develop --release
+
+# Build wheel (release)
+wheel:
+    uv run maturin build --release
+
+# Build wheel for specific target
+wheel-target target:
+    uv run maturin build --release --target {{ target }}
+
+# Build source distribution
+sdist:
+    uv run maturin sdist
+
+# ===== Testing =====
+
+# Install the wheel (use after `build` or `build-release`)
+install:
+    #!/usr/bin/env bash
+    rm -rf .venv/lib/python*/site-packages/fm*
+    uv run maturin build --out dist
+    uv pip install dist/fm-*.whl
+    rm -rf dist/
+
+# Run unit tests (no Apple Intelligence required)
+test: install
+    {{ swift_lib }} .venv/bin/pytest tests/ -m "not integration" -v
+
+# Run integration tests (requires Apple Intelligence)
+test-integration: install
+    {{ swift_lib }} .venv/bin/pytest tests/ -m integration -v
+
+# Run all tests
+test-all: install
+    {{ swift_lib }} .venv/bin/pytest tests/ -v
+
+# Run tests with coverage
+test-cov: install
+    {{ swift_lib }} .venv/bin/pytest tests/ --cov=fm --cov-report=html -v
+    @echo "Coverage report: htmlcov/index.html"
+
+# ===== Linting & Formatting =====
+
+# Run clippy on the Rust code
+clippy:
+    cargo clippy -p fm-python --all-features -- -D warnings
+
+# Format Rust code
+fmt:
+    cargo fmt -p fm-python
+
+# Check Rust formatting
+fmt-check:
+    cargo fmt -p fm-python -- --check
+
+# Run Python linter (ruff)
+lint:
+    uv run ruff check .
+
+# Format Python code (ruff)
+lint-fix:
+    uv run ruff format .
+    uv run ruff check --fix .
+
+# ===== Verification =====
+
+# Run all checks (clippy, fmt, test)
+check: clippy fmt-check test
+
+# Verify the module can be imported
+verify:
+    {{ swift_lib }} uv run python -c "import fm; print(f'fm module loaded: {[x for x in dir(fm) if not x.startswith(\"_\")]}')"
+
+# Show module version and info
+info:
+    @{{ swift_lib }} uv run python -c "import fm; print('Classes:', [x for x in dir(fm) if not x.startswith('_')])"
+
+# ===== Cleaning =====
+
+# Clean build artifacts
+clean:
+    rm -rf target dist *.egg-info .pytest_cache .ruff_cache htmlcov .coverage
+
+# Clean everything including venv
+clean-all: clean
+    rm -rf .venv uv.lock
+
+# ===== Publishing =====
+
+# Build all distribution artifacts
+dist: wheel sdist
+    @echo "Built artifacts in dist/"
+    @ls -la dist/
+
+# Dry-run publish to TestPyPI
+publish-test:
+    uv run maturin publish --repository testpypi
+
+# Publish to PyPI (use GitHub Actions for production releases)
+publish:
+    @echo "For production releases, use: git tag python-v<version> && git push origin python-v<version>"
+    @echo "Or run: uv run maturin publish"
+
+# ===== Interactive =====
+
+# Start Python REPL with fm loaded
+repl:
+    {{ swift_lib }} uv run python -c "import fm; print('fm module loaded'); import code; code.interact(local={'fm': fm})"
+
+# Run an interactive Python shell
+shell:
+    {{ swift_lib }} uv run python
+
+# ===== Examples =====
+
+# Run basic example
+example-basic:
+    {{ swift_lib }} uv run python -c "\
+    import fm\n\
+    model = fm.SystemLanguageModel()\n\
+    if model.is_available:\n\
+        session = fm.Session(model, instructions='Be concise.')\n\
+        print(session.respond('Say hello').content)\n\
+    else:\n\
+        print(f'Model not available: {model.availability}')"
+
+# Run streaming example
+example-streaming:
+    {{ swift_lib }} uv run python -c "\
+    import fm\n\
+    model = fm.SystemLanguageModel()\n\
+    if model.is_available:\n\
+        session = fm.Session(model)\n\
+        session.stream_response('Count from 1 to 5', lambda chunk: print(chunk, end='', flush=True))\n\
+        print()\n\
+    else:\n\
+        print(f'Model not available: {model.availability}')"
+
+# Run schema example
+example-schema:
+    {{ swift_lib }} uv run python -c "\
+    import fm\n\
+    schema = (fm.Schema.object()\n\
+        .property('name', fm.Schema.string(), required=True)\n\
+        .property('age', fm.Schema.integer().minimum(0)))\n\
+    print('Schema:', schema.to_json())"

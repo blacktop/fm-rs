@@ -135,3 +135,38 @@ deny:
 coverage:
     cargo llvm-cov --all-features --html
     @echo "Coverage report: target/llvm-cov/html/index.html"
+
+# ===== Python Bindings =====
+# Full command list: cd bindings/python && just --list
+
+# Build Python bindings (development mode)
+py-build:
+    just -f bindings/python/justfile build
+
+# Build Python bindings (release mode)
+py-build-release:
+    just -f bindings/python/justfile build-release
+
+# Run Python tests
+py-test:
+    just -f bindings/python/justfile test
+
+# Run all Python tests including integration
+py-test-all:
+    just -f bindings/python/justfile test-all
+
+# Build Python wheel
+py-wheel:
+    just -f bindings/python/justfile wheel
+
+# Run Python checks (clippy, fmt, test)
+py-check:
+    just -f bindings/python/justfile check
+
+# Clean Python artifacts
+py-clean:
+    just -f bindings/python/justfile clean-all
+
+# Verify Python module imports correctly
+py-verify:
+    just -f bindings/python/justfile verify

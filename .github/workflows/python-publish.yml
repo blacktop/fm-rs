@@ -1,0 +1,202 @@
+name: Publish Python Package
+
+on:
+  push:
+    tags:
+      - 'python-v[0-9]*.[0-9]*.[0-9]*'      # e.g., python-v0.1.0
+      - 'python-v[0-9]*.[0-9]*.[0-9]*-*'    # e.g., python-v0.1.0-beta.1
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to PyPI (otherwise just build)'
+        required: true
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pin maturin version for reproducible builds
+  MATURIN_VERSION: '1.8'
+
+jobs:
+  # Verify the tag matches pyproject.toml version
+  verify:
+    name: Verify Release
+    runs-on: macos-26
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_publish: ${{ steps.check.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Determine version and publish status
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/python-v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/python-v}"
+          else
+            VERSION=$(grep '^version' bindings/python/pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check publish conditions
+        id: check
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/python-v* ]] || [[ "${{ github.event.inputs.publish }}" == "true" ]]; then
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify pyproject.toml version matches tag
+        if: startsWith(github.ref, 'refs/tags/python-v')
+        run: |
+          PYPROJECT_VERSION=$(grep '^version' bindings/python/pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: pyproject.toml version ($PYPROJECT_VERSION) doesn't match tag (python-v$TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version verified: $PYPROJECT_VERSION"
+
+  # Build macOS ARM64 wheel (Apple Silicon only - FoundationModels.framework requirement)
+  build-macos-arm64:
+    name: Build macOS ARM64
+    needs: verify
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: aarch64-apple-darwin
+          args: --release --out dist
+          maturin-version: ${{ env.MATURIN_VERSION }}
+
+      - name: Test wheel installation
+        run: |
+          pip install bindings/python/dist/*.whl
+          DYLD_LIBRARY_PATH=/usr/lib/swift python -c "import fm; print(f'fm version: {fm.__name__}')"
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos-arm64
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+  # Build source distribution
+  build-sdist:
+    name: Build Source Distribution
+    needs: verify
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+          maturin-version: ${{ env.MATURIN_VERSION }}
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: bindings/python/dist/*.tar.gz
+          if-no-files-found: error
+
+  # Publish to PyPI using Trusted Publishing (OIDC)
+  publish:
+    name: Publish to PyPI
+    needs: [verify, build-macos-arm64, build-sdist]
+    if: needs.verify.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing
+      contents: read
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          packages-dir: dist/
+          verbose: true
+          print-hash: true
+
+  # Create GitHub Release
+  release:
+    name: Create Release
+    needs: [verify, publish]
+    if: startsWith(github.ref, 'refs/tags/python-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Python ${{ needs.verify.outputs.version }}
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            ## Python Bindings for fm-rs
+
+            ### Installation
+
+            ```bash
+            pip install fm-rs==${{ needs.verify.outputs.version }}
+            ```
+
+            ### Requirements
+
+            - macOS 26.0+ (Tahoe)
+            - Apple Silicon (ARM64) only
+            - Apple Intelligence enabled
+
+            ### Documentation
+
+            - [PyPI](https://pypi.org/project/fm-rs/${{ needs.verify.outputs.version }}/)
+            - [GitHub](https://github.com/blacktop/fm-rs/tree/main/bindings/python)
+
+            ### Example
+
+            ```python
+            import fm
+
+            model = fm.SystemLanguageModel()
+            session = fm.Session(model, instructions="You are helpful.")
+            response = session.respond("Hello!")
+            print(response.content)
+            ```
