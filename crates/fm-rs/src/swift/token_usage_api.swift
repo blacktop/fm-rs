@@ -43,10 +43,10 @@ public func fm_model_token_usage_for(
 
     if #available(iOS 26.4, macOS 26.4, visionOS 26.4, *) {
         do {
-            let usage = try AsyncWaiter.wait {
-                try await model.tokenUsage(for: promptString)
+            let count = try AsyncWaiter.wait {
+                try await model.tokenCount(for: promptString)
             }
-            guard let tokenCount = Int64(exactly: usage.tokenCount) else {
+            guard let tokenCount = Int64(exactly: count) else {
                 throw TokenUsageError(message: "Token count value is out of Int64 range")
             }
             return tokenCount
@@ -79,10 +79,10 @@ public func fm_model_token_usage_for_tools(
         do {
             let bridge = try tokenUsageBridge(from: toolsJson)
             let tools: [any Tool] = bridge.map { [$0] } ?? []
-            let usage = try AsyncWaiter.wait {
-                try await model.tokenUsage(for: Instructions(instructionsString), tools: tools)
+            let count = try AsyncWaiter.wait {
+                try await model.tokenCount(for: Instructions(instructionsString))
             }
-            guard let tokenCount = Int64(exactly: usage.tokenCount) else {
+            guard let tokenCount = Int64(exactly: count) else {
                 throw TokenUsageError(message: "Token count value is out of Int64 range")
             }
             return tokenCount

@@ -1094,7 +1094,7 @@ private func fm_rust_string_free(_ s: UnsafeMutablePointer<CChar>?)
 // MARK: - Async Helpers
 
 /// Helper for synchronously running Swift async code.
-private final class AsyncWaiter {
+final class AsyncWaiter {
     private final class AsyncState<T: Sendable>: @unchecked Sendable {
         var result: Result<T, Error>?
         let semaphore = DispatchSemaphore(value: 0)
