@@ -629,10 +629,22 @@ private func decodeToolName(
     return ""
 }
 
-private func buildArgumentsJson(_ arguments: [GenericToolArgument]) -> String {
+private func buildArgumentsJson(
+    _ arguments: [GenericToolArgument],
+    stringProperties: Set<String>
+) -> String {
     var dict: [String: Any] = [:]
     for arg in arguments {
-        if let parsed = parseJsonFragment(arg.value) {
+        if stringProperties.contains(arg.name) {
+            // The schema declares this property as a string; parsing the value
+            // as a JSON fragment would coerce "90210" to a number or "true" to
+            // a boolean. Only unwrap an explicitly quoted JSON string.
+            if arg.value.hasPrefix("\""), let parsed = parseJsonFragment(arg.value) as? String {
+                dict[arg.name] = parsed
+            } else {
+                dict[arg.name] = arg.value
+            }
+        } else if let parsed = parseJsonFragment(arg.value) {
             dict[arg.name] = parsed
         } else {
             dict[arg.name] = arg.value
@@ -648,6 +660,24 @@ private func buildArgumentsJson(_ arguments: [GenericToolArgument]) -> String {
     return text
 }
 
+/// Property names declared with `"type": "string"` in a tool's arguments schema.
+private func stringPropertyNames(inSchemaJson schemaJson: String) -> Set<String> {
+    guard let data = schemaJson.data(using: .utf8),
+          let schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let properties = schema["properties"] as? [String: Any] else {
+        return []
+    }
+
+    var names: Set<String> = []
+    for (name, propertySchema) in properties {
+        if let property = propertySchema as? [String: Any],
+           property["type"] as? String == "string" {
+            names.insert(name)
+        }
+    }
+    return names
+}
+
 private func parseJsonFragment(_ text: String) -> Any? {
     guard let data = text.data(using: .utf8) else { return nil }
     return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
@@ -661,6 +691,7 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
 
     private let dispatcher: ToolDispatcher
     private let toolDescriptions: String
+    private let stringPropertiesByTool: [String: Set<String>]
 
     /// Creates a bridge with the given dispatcher and tool descriptions for the schema.
     init(dispatcher: ToolDispatcher) {
@@ -674,6 +705,12 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
             """
         }.joined(separator: "\n\n")
         self.toolDescriptions = descriptions
+
+        var stringProperties: [String: Set<String>] = [:]
+        for def in dispatcher.toolDefinitions {
+            stringProperties[def.name] = stringPropertyNames(inSchemaJson: def.argumentsSchemaJson)
+        }
+        self.stringPropertiesByTool = stringProperties
     }
 
     var name: String { "invoke_tool" }
@@ -701,7 +738,10 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
         if toolName.isEmpty {
             throw ToolError(message: "Missing tool name")
         }
-        let argsJson = buildArgumentsJson(arguments.arguments)
+        let argsJson = buildArgumentsJson(
+            arguments.arguments,
+            stringProperties: stringPropertiesByTool[toolName] ?? []
+        )
         return try dispatcher.callTool(name: toolName, argumentsJson: argsJson)
     }
 }
