@@ -580,7 +580,7 @@ pub(crate) fn error_from_parts(code: std::ffi::c_int, message: String) -> Error 
     match ffi::ErrorCode::from(code) {
         ffi::ErrorCode::ModelNotAvailable => Error::ModelNotAvailable,
         ffi::ErrorCode::GenerationFailed => Error::GenerationError(message),
-        ffi::ErrorCode::Cancelled => Error::GenerationError("Operation cancelled".to_string()),
+        ffi::ErrorCode::Cancelled => Error::Cancelled(message),
         ffi::ErrorCode::ToolError => Error::ToolCall(ToolCallError {
             tool_name: "unknown".to_string(),
             arguments: serde_json::Value::Null,

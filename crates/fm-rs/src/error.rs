@@ -32,6 +32,9 @@ pub enum Error {
     /// Error during generation.
     GenerationError(String),
 
+    /// The operation was cancelled (e.g. via [`crate::CancellationHandle`]).
+    Cancelled(String),
+
     /// Operation timed out.
     Timeout(String),
 
@@ -122,6 +125,7 @@ impl fmt::Display for Error {
             }
             Error::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
             Error::GenerationError(msg) => write!(f, "Generation error: {msg}"),
+            Error::Cancelled(msg) => write!(f, "Operation cancelled: {msg}"),
             Error::Timeout(msg) => write!(f, "Operation timed out: {msg}"),
             Error::UnsupportedPlatform(msg) => write!(f, "Unsupported platform: {msg}"),
             Error::NetworkFailure(msg) => write!(f, "Network failure: {msg}"),
