@@ -298,7 +298,10 @@ impl Session {
         } else {
             let tool_refs: Vec<&dyn Tool> = tools.iter().map(std::convert::AsRef::as_ref).collect();
             for tool in tools {
-                tool_map.insert(tool.name().to_string(), Arc::clone(tool));
+                // Key by the trimmed name: tools_to_json advertises trimmed
+                // names, and Swift trims what the model produces before
+                // dispatching.
+                tool_map.insert(tool.name().trim().to_string(), Arc::clone(tool));
             }
             let json_str = tools_to_json(&tool_refs)?;
             Some(CString::new(json_str)?)
