@@ -6,11 +6,20 @@
 //! - Apple Intelligence must be enabled
 //! - The device must support Apple Intelligence
 
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use fm_rs::{
-    Error, GenerationOptions, ModelAvailability, Session, SystemLanguageModel, SystemTool,
+    CancellationHandle, Error, GenerationOptions, ModelAvailability, Session, SystemLanguageModel,
+    SystemTool,
 };
+
+const CANCELLATION_PROMPT: &str =
+    "Write a detailed 2,000-word history of computing, with many sections.";
+const GENERATION_START_TIMEOUT: Duration = Duration::from_secs(30);
+const GENERATION_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_CANCELLATION_ATTEMPTS: usize = 8;
 
 // ============================================================================
 // Integration Tests (require FoundationModels to be available)
@@ -159,6 +168,99 @@ fn test_streaming() {
         "Should have received at least one chunk"
     );
     println!("Received {} chunks", chunks.len());
+}
+
+fn wait_until_responding(
+    handle: &CancellationHandle,
+    receiver: &mpsc::Receiver<fm_rs::Result<()>>,
+) {
+    let started = Instant::now();
+    while started.elapsed() < GENERATION_START_TIMEOUT {
+        if handle.is_responding() {
+            return;
+        }
+        match receiver.try_recv() {
+            Ok(result) => {
+                panic!("Generation returned before entering the responding state: {result:?}")
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("Generation worker disconnected before entering the responding state")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        thread::yield_now();
+    }
+
+    panic!("Generation did not start within {GENERATION_START_TIMEOUT:?}");
+}
+
+fn receive_generation_result(
+    receiver: &mpsc::Receiver<fm_rs::Result<()>>,
+    worker: thread::JoinHandle<()>,
+) -> fm_rs::Result<()> {
+    let result = receiver
+        .recv_timeout(GENERATION_RESULT_TIMEOUT)
+        .unwrap_or_else(|error| {
+            panic!("Generation did not return within {GENERATION_RESULT_TIMEOUT:?}: {error}")
+        });
+    worker.join().expect("Generation worker panicked");
+    result
+}
+
+#[test]
+#[ignore = "Requires Apple Intelligence to be enabled"]
+fn test_blocking_response_cancellation_returns_cancelled() {
+    let model = SystemLanguageModel::new().expect("Failed to create model");
+    assert!(model.is_available(), "Foundation Model is not available");
+
+    let session = Session::new(&model).expect("Failed to create session");
+    let handle = session.cancellation_handle();
+    let (sender, receiver) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let options = GenerationOptions::builder()
+            .max_response_tokens(2_048)
+            .build();
+        let result = session.respond(CANCELLATION_PROMPT, &options).map(|_| ());
+        let _ = sender.send(result);
+    });
+
+    wait_until_responding(&handle, &receiver);
+    handle.cancel();
+    let result = receive_generation_result(&receiver, worker);
+
+    assert!(
+        matches!(result, Err(Error::Cancelled(_))),
+        "Expected Error::Cancelled, got {result:?}"
+    );
+}
+
+#[test]
+#[ignore = "Requires Apple Intelligence to be enabled"]
+fn test_stream_start_cancellation_returns_cancelled() {
+    let model = SystemLanguageModel::new().expect("Failed to create model");
+    assert!(model.is_available(), "Foundation Model is not available");
+
+    for attempt in 1..=STREAM_CANCELLATION_ATTEMPTS {
+        let session = Session::new(&model).expect("Failed to create session");
+        let handle = session.cancellation_handle();
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let options = GenerationOptions::builder()
+                .max_response_tokens(2_048)
+                .build();
+            let result = session.stream_response(CANCELLATION_PROMPT, &options, |_| {});
+            let _ = sender.send(result);
+        });
+
+        wait_until_responding(&handle, &receiver);
+        handle.cancel();
+        let result = receive_generation_result(&receiver, worker);
+
+        assert!(
+            matches!(result, Err(Error::Cancelled(_))),
+            "Expected Error::Cancelled on attempt {attempt}, got {result:?}"
+        );
+    }
 }
 
 fn context_overflow_session(model: &SystemLanguageModel) -> Session {
