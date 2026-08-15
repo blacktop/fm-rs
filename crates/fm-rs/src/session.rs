@@ -46,7 +46,10 @@ pub unsafe extern "C" fn fm_rust_tool_data_free(user_data: *mut c_void) {
     }
     // Drops the dispatcher's strong reference — the only one on the success
     // path — freeing the allocation and every `Arc<dyn Tool>` in its map.
-    drop(unsafe { Arc::from_raw(user_data as *const ToolCallbackData) });
+    // A user tool's Drop may panic; catch it rather than unwinding into
+    // Swift's deinit, which would abort the process.
+    let data = unsafe { Arc::from_raw(user_data as *const ToolCallbackData) };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(data)));
 }
 
 /// Response returned by the model.
@@ -1527,8 +1530,23 @@ extern "C" fn stream_chunk_callback(user_data: *mut c_void, chunk: *const c_char
     let state = unsafe { &*(user_data as *const StreamState) };
     let chunk_str = unsafe { CStr::from_ptr(chunk).to_string_lossy() };
 
-    if let Ok(mut on_chunk) = state.on_chunk.lock() {
-        on_chunk(&chunk_str);
+    // A panic here would unwind into Swift and abort the process; convert it
+    // into a stream error instead. The poisoned mutex suppresses the user
+    // callback for any chunks that arrive after the panic.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Ok(mut on_chunk) = state.on_chunk.lock() {
+            on_chunk(&chunk_str);
+        }
+    }))
+    .is_err();
+
+    if panicked {
+        if let Ok(mut error) = state.error.lock() {
+            error.get_or_insert((
+                ffi::ErrorCode::Unknown as c_int,
+                "Stream chunk callback panicked".to_string(),
+            ));
+        }
     }
 }
 
@@ -1608,10 +1626,14 @@ extern "C" fn session_tool_callback(
     // Release the lock before calling the tool (it might take a while)
     drop(tools);
 
-    // Invoke the tool
-    let result = match tool.call(arguments) {
-        Ok(output) => ToolResult::success(output),
-        Err(e) => ToolResult::error(e.to_string()),
+    // Invoke the tool. A panic here would unwind into Swift and abort the
+    // process; report it as a tool error so the model (and caller) can react.
+    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tool.call(arguments)
+    })) {
+        Ok(Ok(output)) => ToolResult::success(output),
+        Ok(Err(e)) => ToolResult::error(e.to_string()),
+        Err(_) => ToolResult::error(format!("Tool '{name}' panicked")),
     };
 
     string_to_c(result.to_json())
