@@ -1504,9 +1504,11 @@ private func extractBalancedJson(from content: String, open: Character, close: C
     var inString = false
     var escapeNext = false
     var endIndex = content.startIndex
+    var index = content.startIndex
 
-    for (index, char) in content.enumerated() {
-        let stringIndex = content.index(content.startIndex, offsetBy: index)
+    while index < content.endIndex {
+        let char = content[index]
+        defer { index = content.index(after: index) }
 
         if escapeNext {
             escapeNext = false
@@ -1529,7 +1531,7 @@ private func extractBalancedJson(from content: String, open: Character, close: C
             } else if char == close {
                 depth -= 1
                 if depth == 0 {
-                    endIndex = content.index(after: stringIndex)
+                    endIndex = content.index(after: index)
                     break
                 }
             }
