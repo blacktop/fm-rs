@@ -261,16 +261,16 @@ unsafe extern "C" {
     pub fn fm_error_code(error: SwiftPtr) -> c_int;
 
     /// Gets the error message from an error object.
-    /// The returned string is valid until `fm_error_free` is called.
-    pub fn fm_error_message(error: SwiftPtr) -> *const c_char;
+    /// Returns a copy the caller must free with `fm_string_free`.
+    pub fn fm_error_message(error: SwiftPtr) -> *mut c_char;
 
     /// Gets the tool name from a tool error (may be null).
-    /// The returned string is valid until `fm_error_free` is called.
-    pub fn fm_error_tool_name(error: SwiftPtr) -> *const c_char;
+    /// Returns a copy the caller must free with `fm_string_free`.
+    pub fn fm_error_tool_name(error: SwiftPtr) -> *mut c_char;
 
     /// Gets the tool arguments JSON from a tool error (may be null).
-    /// The returned string is valid until `fm_error_free` is called.
-    pub fn fm_error_tool_arguments(error: SwiftPtr) -> *const c_char;
+    /// Returns a copy the caller must free with `fm_string_free`.
+    pub fn fm_error_tool_arguments(error: SwiftPtr) -> *mut c_char;
 
     /// Frees an error object.
     pub fn fm_error_free(error: SwiftPtr);

@@ -520,6 +520,21 @@ fn estimate_tokens(text: &str, chars_per_token: usize) -> usize {
     chars.div_ceil(denom)
 }
 
+/// Copies and frees a Swift-allocated (`strdup`) error string, or returns
+/// `None` for a null pointer.
+///
+/// # Safety
+///
+/// `ptr` must be null or a `strdup` allocation owned by the caller.
+unsafe fn take_error_string(ptr: *mut std::ffi::c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let value = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+    unsafe { ffi::fm_string_free(ptr) };
+    Some(value)
+}
+
 /// Converts a Swift error pointer to a Rust Error.
 pub(crate) fn error_from_swift(error: SwiftPtr) -> Error {
     if error.is_null() {
@@ -529,33 +544,15 @@ pub(crate) fn error_from_swift(error: SwiftPtr) -> Error {
     }
 
     let code = unsafe { ffi::fm_error_code(error) };
-    let msg_ptr = unsafe { ffi::fm_error_message(error) };
 
-    let message = if msg_ptr.is_null() {
-        "Error message unavailable (null pointer from Swift)".to_string()
-    } else {
-        unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() }
-    };
+    let message = unsafe { take_error_string(ffi::fm_error_message(error)) }
+        .unwrap_or_else(|| "Error message unavailable (null pointer from Swift)".to_string());
 
     // Extract tool context if this is a tool error
-    let tool_name = unsafe {
-        let ptr = ffi::fm_error_tool_name(error);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
-        }
-    };
+    let tool_name = unsafe { take_error_string(ffi::fm_error_tool_name(error)) };
 
-    let tool_arguments = unsafe {
-        let ptr = ffi::fm_error_tool_arguments(error);
-        if ptr.is_null() {
-            None
-        } else {
-            let json_str = CStr::from_ptr(ptr).to_string_lossy().into_owned();
-            serde_json::from_str(&json_str).ok()
-        }
-    };
+    let tool_arguments = unsafe { take_error_string(ffi::fm_error_tool_arguments(error)) }
+        .and_then(|json_str| serde_json::from_str(&json_str).ok());
 
     unsafe {
         ffi::fm_error_free(error);

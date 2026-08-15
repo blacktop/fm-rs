@@ -91,27 +91,27 @@ public func fm_error_code(_ errorPtr: UnsafeMutableRawPointer) -> Int32 {
     return errorInfo.code
 }
 
-/// Gets the error message from an error object.
+/// Gets the error message from an error object. Caller frees with `fm_string_free`.
 @_cdecl("fm_error_message")
-public func fm_error_message(_ errorPtr: UnsafeMutableRawPointer) -> UnsafePointer<CChar>? {
+public func fm_error_message(_ errorPtr: UnsafeMutableRawPointer) -> UnsafeMutablePointer<CChar>? {
     let errorInfo = Unmanaged<AnyObject>.fromOpaque(errorPtr).takeUnretainedValue() as! ErrorInfo
-    return (errorInfo.message as NSString).utf8String
+    return strdup(errorInfo.message)
 }
 
-/// Gets the tool name from a tool error (may be null).
+/// Gets the tool name from a tool error (may be null). Caller frees with `fm_string_free`.
 @_cdecl("fm_error_tool_name")
-public func fm_error_tool_name(_ errorPtr: UnsafeMutableRawPointer) -> UnsafePointer<CChar>? {
+public func fm_error_tool_name(_ errorPtr: UnsafeMutableRawPointer) -> UnsafeMutablePointer<CChar>? {
     let errorInfo = Unmanaged<AnyObject>.fromOpaque(errorPtr).takeUnretainedValue() as! ErrorInfo
     guard let toolName = errorInfo.toolName else { return nil }
-    return (toolName as NSString).utf8String
+    return strdup(toolName)
 }
 
-/// Gets the tool arguments JSON from a tool error (may be null).
+/// Gets the tool arguments JSON from a tool error (may be null). Caller frees with `fm_string_free`.
 @_cdecl("fm_error_tool_arguments")
-public func fm_error_tool_arguments(_ errorPtr: UnsafeMutableRawPointer) -> UnsafePointer<CChar>? {
+public func fm_error_tool_arguments(_ errorPtr: UnsafeMutableRawPointer) -> UnsafeMutablePointer<CChar>? {
     let errorInfo = Unmanaged<AnyObject>.fromOpaque(errorPtr).takeUnretainedValue() as! ErrorInfo
     guard let args = errorInfo.toolArguments else { return nil }
-    return (args as NSString).utf8String
+    return strdup(args)
 }
 
 /// Frees an error object.
