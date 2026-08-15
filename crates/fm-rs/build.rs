@@ -50,7 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-link-lib=framework=CoreSpotlight");
 
     // Link Swift standard libraries
-    if let Some(swift_lib_path) = get_swift_lib_path() {
+    let swift_target = get_swift_target(&target)?;
+    if let Some(sdk_name) = get_sdk_name(&swift_target)
+        && let Some(swift_lib_path) = get_swift_lib_path(sdk_name)
+    {
         println!("cargo:rustc-link-search=native={swift_lib_path}");
     }
 
@@ -91,6 +94,11 @@ fn compile_swift(
         "-target".to_string(),
         swift_target,
     ];
+    // Match the Cargo profile: without this the FFI layer (JSON codecs,
+    // transcript encoding) ships at -Onone even in release builds.
+    if env::var("OPT_LEVEL").is_ok_and(|level| level != "0") {
+        args.push("-O".to_string());
+    }
     if let Some(sdk) = sdk_path {
         args.extend(["-sdk".to_string(), sdk]);
     }
@@ -210,8 +218,8 @@ fn get_swift_target(target: &str) -> Result<String, Box<dyn std::error::Error>> 
     Ok(swift_target.to_string())
 }
 
-/// Gets the path to Swift runtime libraries.
-fn get_swift_lib_path() -> Option<String> {
+/// Gets the path to Swift runtime libraries for the given SDK.
+fn get_swift_lib_path(sdk_name: &str) -> Option<String> {
     // Try to get the path from xcrun
     let output = Command::new("xcrun")
         .args(["--toolchain", "default", "--find", "swift"])
@@ -224,12 +232,12 @@ fn get_swift_lib_path() -> Option<String> {
     }
 
     // Swift binary is at: /path/to/toolchain/usr/bin/swift
-    // Libraries are at: /path/to/toolchain/usr/lib/swift/macosx
+    // Libraries are at: /path/to/toolchain/usr/lib/swift/<sdk>
     let toolchain_path = std::path::Path::new(&swift_path)
         .parent()? // usr/bin
         .parent()?; // usr
 
-    let lib_path = toolchain_path.join("lib/swift/macosx");
+    let lib_path = toolchain_path.join("lib/swift").join(sdk_name);
     if lib_path.exists() {
         return Some(lib_path.to_string_lossy().into_owned());
     }
