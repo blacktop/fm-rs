@@ -382,23 +382,23 @@ fn chunk_text(text: &str, chunk_tokens: usize, chars_per_token: usize) -> Vec<St
     chunks
 }
 
-/// Splits a line into pieces of at most `max_chars` characters.
+/// Splits a line into pieces of at most `max_chars` characters, in one pass.
 fn split_line(line: &str, max_chars: usize) -> Vec<&str> {
     let max_chars = max_chars.max(1);
     let mut pieces = Vec::new();
-    let mut rest = line;
+    let mut piece_start = 0;
+    let mut piece_chars = 0;
 
-    while rest.chars().count() > max_chars {
-        let split_at = rest
-            .char_indices()
-            .nth(max_chars)
-            .map_or(rest.len(), |(byte_index, _)| byte_index);
-        let (piece, remainder) = rest.split_at(split_at);
-        pieces.push(piece);
-        rest = remainder;
+    for (byte_index, _) in line.char_indices() {
+        if piece_chars == max_chars {
+            pieces.push(&line[piece_start..byte_index]);
+            piece_start = byte_index;
+            piece_chars = 0;
+        }
+        piece_chars += 1;
     }
 
-    pieces.push(rest);
+    pieces.push(&line[piece_start..]);
     pieces
 }
 
