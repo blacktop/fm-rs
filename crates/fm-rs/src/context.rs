@@ -211,7 +211,12 @@ pub fn compact_transcript(
             config.chars_per_token,
         );
         let response = session.respond(&prompt, &config.summary_options)?;
-        summary = response.into_content();
+        let updated = response.into_content();
+        // An empty response would silently discard every earlier chunk's
+        // content; keep the previous rolling summary instead.
+        if !updated.trim().is_empty() {
+            summary = updated;
+        }
     }
 
     Ok(summary)
@@ -240,6 +245,19 @@ pub fn compact_session_if_needed(
     let transcript_json = session.transcript_json()?;
     let summary = compact_transcript(model, &transcript_json, config)?;
     let compacted = session_from_summary(model, base_instructions, &summary)?;
+
+    // If the compacted session still exceeds the budget, the base
+    // instructions alone are too large; report it rather than letting a
+    // caller's compact-until-under-limit loop spin forever.
+    let compacted_usage = compacted.context_usage(limit)?;
+    if compacted_usage.over_limit {
+        return Err(crate::error::Error::InvalidInput(format!(
+            "Compacted session still exceeds the context budget \
+             ({} estimated tokens > {} available); reduce the base \
+             instructions or max_summary_tokens",
+            compacted_usage.estimated_tokens, compacted_usage.available_tokens
+        )));
+    }
 
     Ok(Some(CompactedSession {
         session: compacted,
@@ -334,13 +352,18 @@ fn chunk_text(text: &str, chunk_tokens: usize, chars_per_token: usize) -> Vec<St
     let mut current = String::new();
 
     for line in text.lines() {
-        let line_len = line.chars().count() + 1;
-        if !current.is_empty() && current.chars().count() + line_len > max_chars {
-            chunks.push(current.trim_end().to_string());
-            current.clear();
+        // A single line can exceed the chunk budget (transcript_to_text emits
+        // one line per message); split it so no chunk overflows the
+        // summarizer's context window.
+        for piece in split_line(line, max_chars) {
+            let piece_len = piece.chars().count() + 1;
+            if !current.is_empty() && current.chars().count() + piece_len > max_chars {
+                chunks.push(current.trim_end().to_string());
+                current.clear();
+            }
+            current.push_str(piece);
+            current.push('\n');
         }
-        current.push_str(line);
-        current.push('\n');
     }
 
     if !current.trim().is_empty() {
@@ -352,6 +375,26 @@ fn chunk_text(text: &str, chunk_tokens: usize, chars_per_token: usize) -> Vec<St
     }
 
     chunks
+}
+
+/// Splits a line into pieces of at most `max_chars` characters.
+fn split_line(line: &str, max_chars: usize) -> Vec<&str> {
+    let max_chars = max_chars.max(1);
+    let mut pieces = Vec::new();
+    let mut rest = line;
+
+    while rest.chars().count() > max_chars {
+        let split_at = rest
+            .char_indices()
+            .nth(max_chars)
+            .map_or(rest.len(), |(byte_index, _)| byte_index);
+        let (piece, remainder) = rest.split_at(split_at);
+        pieces.push(piece);
+        rest = remainder;
+    }
+
+    pieces.push(rest);
+    pieces
 }
 
 fn collect_transcript_lines(value: &Value, out: &mut Vec<String>) {
@@ -418,6 +461,16 @@ mod tests {
         let text = "Line one\nLine two\nLine three";
         let chunks = chunk_text(text, 2, 4);
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_text_splits_single_line_exceeding_budget() {
+        let long_line = "x".repeat(100);
+        let chunks = chunk_text(&long_line, 2, 4);
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 8));
+        let total: usize = chunks.iter().map(|chunk| chunk.chars().count()).sum();
+        assert_eq!(total, 100);
     }
 
     #[test]
