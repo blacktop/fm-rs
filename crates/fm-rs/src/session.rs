@@ -835,10 +835,49 @@ impl Session {
     }
 
     /// Cancels an ongoing stream operation.
+    ///
+    /// Every generation method blocks the calling thread and `Session` is not
+    /// `Sync`, so this cannot be reached while a request is in flight. To
+    /// cancel from another thread, obtain a [`CancellationHandle`] via
+    /// [`cancellation_handle`](Self::cancellation_handle) before starting.
     pub fn cancel(&self) {
         unsafe {
             ffi::fm_session_cancel(self.ptr.as_ptr());
         }
+    }
+
+    /// Returns a thread-safe handle that can cancel this session's in-flight
+    /// generation from another thread.
+    ///
+    /// The handle holds its own reference to the underlying Swift session, so
+    /// it remains safe to use (as a no-op) after the `Session` is dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use fm_rs::{GenerationOptions, Session, SystemLanguageModel};
+    ///
+    /// let model = SystemLanguageModel::new()?;
+    /// let session = Session::new(&model)?;
+    /// let handle = session.cancellation_handle();
+    ///
+    /// let canceller = std::thread::spawn(move || {
+    ///     std::thread::sleep(std::time::Duration::from_millis(100));
+    ///     handle.cancel();
+    /// });
+    ///
+    /// let result = session.stream_response(
+    ///     "Tell me a very long story",
+    ///     &GenerationOptions::default(),
+    ///     |chunk| print!("{chunk}"),
+    /// );
+    /// assert!(matches!(result, Err(fm_rs::Error::Cancelled(_))));
+    /// canceller.join().expect("canceller thread panicked");
+    /// # Ok::<(), fm_rs::Error>(())
+    /// ```
+    pub fn cancellation_handle(&self) -> CancellationHandle {
+        unsafe { ffi::fm_session_retain(self.ptr.as_ptr()) };
+        CancellationHandle { ptr: self.ptr }
     }
 
     /// Checks if the session is currently generating a response.
@@ -1260,7 +1299,43 @@ impl Drop for Session {
 unsafe impl Send for Session {}
 
 // Note: Session is NOT Sync because streaming callbacks use internal mutable state.
-// If you need to share a session across threads, wrap it in Arc<Mutex<Session>>.
+// To cancel or observe an in-flight generation from another thread, use
+// Session::cancellation_handle().
+
+/// Thread-safe handle for cancelling a [`Session`]'s in-flight generation.
+///
+/// Created via [`Session::cancellation_handle`]. Holds its own reference to
+/// the Swift session, so it may outlive the `Session`; cancelling after the
+/// session is gone is a no-op.
+pub struct CancellationHandle {
+    ptr: NonNull<c_void>,
+}
+
+impl CancellationHandle {
+    /// Cancels the session's in-flight generation, if any.
+    ///
+    /// A cancelled blocking or streaming call returns [`Error::Cancelled`].
+    pub fn cancel(&self) {
+        unsafe { ffi::fm_session_cancel(self.ptr.as_ptr()) };
+    }
+
+    /// Returns whether the session is currently generating a response.
+    pub fn is_responding(&self) -> bool {
+        unsafe { ffi::fm_session_is_responding(self.ptr.as_ptr()) }
+    }
+}
+
+impl Drop for CancellationHandle {
+    fn drop(&mut self) {
+        unsafe { ffi::fm_session_release(self.ptr.as_ptr()) };
+    }
+}
+
+// SAFETY: the handle only calls into Swift entry points that guard their
+// state with a lock (cancelCurrentTask) or read a framework-owned property
+// (isResponding); the retained reference keeps the pointee alive.
+unsafe impl Send for CancellationHandle {}
+unsafe impl Sync for CancellationHandle {}
 
 /// Type alias for the chunk callback function.
 type ChunkCallbackFn = dyn FnMut(&str) + Send;

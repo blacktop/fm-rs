@@ -888,6 +888,21 @@ public func fm_session_free(_ sessionPtr: UnsafeMutableRawPointer?) {
     state.cancelCurrentTask()
 }
 
+/// Takes an extra retain on the session state so a cancellation handle can
+/// outlive the owning session without dangling.
+@_cdecl("fm_session_retain")
+public func fm_session_retain(_ sessionPtr: UnsafeMutableRawPointer) {
+    _ = Unmanaged<AnyObject>.fromOpaque(sessionPtr).retain()
+}
+
+/// Releases a reference taken with `fm_session_retain`. Unlike
+/// `fm_session_free`, this does not cancel any in-flight task.
+@_cdecl("fm_session_release")
+public func fm_session_release(_ sessionPtr: UnsafeMutableRawPointer?) {
+    guard let sessionPtr = sessionPtr else { return }
+    Unmanaged<AnyObject>.fromOpaque(sessionPtr).release()
+}
+
 // MARK: - Session Respond (Blocking)
 
 /// Sends a prompt and blocks until response is ready.
@@ -1003,8 +1018,16 @@ public func fm_session_stream(
                 }
             }
 
+            // A cancelled stream can end cleanly instead of throwing; report
+            // that as cancellation, not as successful completion.
             callbackQueue.sync {
-                callbacks.onDone(callbacks.userData)
+                if Task.isCancelled {
+                    "Cancelled".withCString { ptr in
+                        callbacks.onError(callbacks.userData, FFIErrorCode.cancelled.rawValue, ptr)
+                    }
+                } else {
+                    callbacks.onDone(callbacks.userData)
+                }
             }
         } catch {
             callbackQueue.sync {
@@ -1324,8 +1347,16 @@ public func fm_session_stream_json(
                 }
             }
 
+            // A cancelled stream can end cleanly instead of throwing; report
+            // that as cancellation, not as successful completion.
             callbackQueue.sync {
-                callbacks.onDone(callbacks.userData)
+                if Task.isCancelled {
+                    "Cancelled".withCString { ptr in
+                        callbacks.onError(callbacks.userData, FFIErrorCode.cancelled.rawValue, ptr)
+                    }
+                } else {
+                    callbacks.onDone(callbacks.userData)
+                }
             }
         } catch {
             callbackQueue.sync {

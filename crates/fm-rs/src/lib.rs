@@ -170,7 +170,7 @@ pub use crate::options::{
     GenerationOptions, GenerationOptionsBuilder, ReasoningLevel, Sampling, ToolCallingMode,
 };
 pub use crate::session::{
-    Attachment, Response, Session, SessionBuilder, SessionUsage, SystemTool,
+    Attachment, CancellationHandle, Response, Session, SessionBuilder, SessionUsage, SystemTool,
     TranscriptErrorHandlingPolicy,
 };
 pub use crate::tool::{Tool, ToolOutput};

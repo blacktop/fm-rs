@@ -106,6 +106,13 @@ unsafe extern "C" {
     /// Frees a session.
     pub fn fm_session_free(session: SwiftPtr);
 
+    /// Takes an extra retain on the session state (for cancellation handles).
+    pub fn fm_session_retain(session: SwiftPtr);
+
+    /// Releases a reference taken with `fm_session_retain` without cancelling
+    /// any in-flight task.
+    pub fn fm_session_release(session: SwiftPtr);
+
     /// Sends a prompt and blocks until response is ready.
     /// `options_json` may be null for default options.
     /// Returns the response text (caller must free with `fm_string_free`).
