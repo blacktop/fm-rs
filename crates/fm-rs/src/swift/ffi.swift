@@ -741,7 +741,6 @@ final class SessionState: @unchecked Sendable {
         self.toolDispatcher = toolDispatcher
     }
 
-
     /// Records per-response usage; nil clears it (fallback builds/runtimes).
     func setLastResponseUsage(_ json: String?) {
         lock.lock()
