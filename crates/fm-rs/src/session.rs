@@ -796,7 +796,7 @@ impl Session {
         session_usage_from_json(&json).ok()
     }
 
-    /// Cancels an ongoing stream operation.
+    /// Cancels the in-flight generation (blocking or streaming), if any.
     ///
     /// Every generation method blocks the calling thread and `Session` is not
     /// `Sync`, so this cannot be reached while a request is in flight. To
@@ -1251,7 +1251,9 @@ pub struct CancellationHandle {
 impl CancellationHandle {
     /// Cancels the session's in-flight generation, if any.
     ///
-    /// A cancelled blocking or streaming call returns [`Error::Cancelled`].
+    /// Covers blocking (`respond*`) and streaming calls alike; a cancelled
+    /// call returns [`Error::Cancelled`]. Cancellation is cooperative, so the
+    /// framework may finish a small amount of work before observing it.
     pub fn cancel(&self) {
         unsafe { ffi::fm_session_cancel(self.ptr.as_ptr()) };
     }

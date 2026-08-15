@@ -149,7 +149,10 @@ private func createErrorFromException(_ error: Error, defaultCode: FFIErrorCode 
 /// Foundation Models 27 taxonomy second, 26-era `GenerationError` cases third,
 /// and the observed private bridge identity last.
 func classifyPlatformError(_ error: Error) -> (FFIErrorCode, String)? {
-    classifyPrivateCloudComputeError(error)
+    if error is CancellationError {
+        return (.cancelled, "Operation cancelled")
+    }
+    return classifyPrivateCloudComputeError(error)
         ?? classifyLanguageModelError(error)
         ?? classifyLegacyGenerationError(error)
         ?? classifyObservedGenerativeFunctionsContextSizeError(error)
@@ -840,6 +843,18 @@ final class SessionState: @unchecked Sendable {
         currentTask = task
     }
 
+    /// Creates a detached task and registers it while holding the lock, so a
+    /// concurrent `fm_session_cancel` cannot slip between creation and
+    /// registration and be lost.
+    @discardableResult
+    func beginTrackedTask(_ operation: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
+        lock.lock()
+        defer { lock.unlock() }
+        let task = Task.detached { await operation() }
+        currentTask = task
+        return task
+    }
+
     func cancelCurrentTask() {
         lock.lock()
         defer { lock.unlock() }
@@ -1002,7 +1017,7 @@ public func fm_session_respond(
     let options = parseGenerationOptions(optionsJson)
 
     do {
-        let (content, usageJson) = try AsyncWaiter.wait {
+        let (content, usageJson) = try AsyncWaiter.wait(session: state) {
             let response = try await state.session.respond(to: promptString, options: options)
             return (response.content, responseUsageJson(response))
         }
@@ -1031,7 +1046,7 @@ public func fm_session_respond_with_timeout(
     let options = parseGenerationOptions(optionsJson)
 
     do {
-        let (content, usageJson) = try AsyncWaiter.wait(timeoutMs: timeoutMs) {
+        let (content, usageJson) = try AsyncWaiter.wait(session: state, timeoutMs: timeoutMs) {
             let response = try await state.session.respond(to: promptString, options: options)
             return (response.content, responseUsageJson(response))
         }
@@ -1080,7 +1095,7 @@ public func fm_session_stream(
     )
     let semaphore = DispatchSemaphore(value: 0)
 
-    let task = Task.detached {
+    state.beginTrackedTask {
         do {
             let stream = state.session.streamResponse(to: promptString, options: options)
 
@@ -1162,7 +1177,6 @@ public func fm_session_stream(
         semaphore.signal()
     }
 
-    state.setTask(task)
     semaphore.wait()
     state.setTask(nil)
 }
@@ -1306,9 +1320,9 @@ private func respondJson(
 
     let result: (content: String, usageJson: String?)
     if let timeoutMs = timeoutMs {
-        result = try AsyncWaiter.wait(timeoutMs: timeoutMs, operation)
+        result = try AsyncWaiter.wait(session: state, timeoutMs: timeoutMs, operation)
     } else {
-        result = try AsyncWaiter.wait(operation)
+        result = try AsyncWaiter.wait(session: state, operation)
     }
 
     state.setLastResponseUsage(result.usageJson)
@@ -1416,7 +1430,7 @@ public func fm_session_stream_json(
     )
     let semaphore = DispatchSemaphore(value: 0)
 
-    let task = Task.detached {
+    state.beginTrackedTask {
         do {
             let stream = state.session.streamResponse(to: formattedPrompt, options: options)
 
@@ -1473,7 +1487,6 @@ public func fm_session_stream_json(
         semaphore.signal()
     }
 
-    state.setTask(task)
     semaphore.wait()
     state.setTask(nil)
 }
@@ -1589,16 +1602,21 @@ private func fm_rust_string_free(_ s: UnsafeMutablePointer<CChar>?)
 // MARK: - Async Helpers
 
 /// Helper for synchronously running Swift async code.
+///
+/// Pass `session:` for session-bound generations so the task is registered
+/// with the `SessionState` and `fm_session_cancel` can reach it.
 final class AsyncWaiter {
     private final class AsyncState<T: Sendable>: @unchecked Sendable {
         var result: Result<T, Error>?
         let semaphore = DispatchSemaphore(value: 0)
     }
 
-    static func wait<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
-        let state = AsyncState<T>()
-
-        Task.detached {
+    private static func launch<T: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> T,
+        session: SessionState?,
+        into state: AsyncState<T>
+    ) -> Task<Void, Never> {
+        let body: @Sendable () async -> Void = {
             do {
                 let value = try await operation()
                 state.result = .success(value)
@@ -1607,9 +1625,17 @@ final class AsyncWaiter {
             }
             state.semaphore.signal()
         }
+        if let session {
+            return session.beginTrackedTask(body)
+        }
+        return Task.detached(operation: body)
+    }
 
-        state.semaphore.wait()
-
+    private static func takeResult<T: Sendable>(
+        _ state: AsyncState<T>,
+        session: SessionState?
+    ) throws -> T {
+        session?.setTask(nil)
         switch state.result {
         case .success(let value):
             return value
@@ -1621,34 +1647,32 @@ final class AsyncWaiter {
     }
 
     static func wait<T: Sendable>(
+        session: SessionState? = nil,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        let state = AsyncState<T>()
+        _ = launch(operation, session: session, into: state)
+        state.semaphore.wait()
+        return try takeResult(state, session: session)
+    }
+
+    static func wait<T: Sendable>(
+        session: SessionState? = nil,
         timeoutMs: UInt64,
         _ operation: @escaping @Sendable () async throws -> T
     ) throws -> T {
         let state = AsyncState<T>()
-        let task = Task.detached {
-            do {
-                let value = try await operation()
-                state.result = .success(value)
-            } catch {
-                state.result = .failure(error)
-            }
-            state.semaphore.signal()
-        }
+        let task = launch(operation, session: session, into: state)
 
         let timeoutMsInt = timeoutMs > UInt64(Int.max) ? Int.max : Int(timeoutMs)
         if state.semaphore.wait(timeout: .now() + .milliseconds(timeoutMsInt)) == .timedOut {
+            // Leave the cancelled task registered: it may drain for a while,
+            // and fm_session_cancel remains able to target it.
             task.cancel()
             throw TimeoutError(message: "Timed out after \(timeoutMs) ms")
         }
 
-        switch state.result {
-        case .success(let value):
-            return value
-        case .failure(let error):
-            throw error
-        case .none:
-            throw TimeoutError(message: "No result available")
-        }
+        return try takeResult(state, session: session)
     }
 }
 

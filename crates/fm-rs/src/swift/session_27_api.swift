@@ -405,7 +405,7 @@ public func fm_session_respond_with_attachments(
     }
 
     do {
-        let (content, usageJson) = try AsyncWaiter.wait {
+        let (content, usageJson) = try AsyncWaiter.wait(session: state) {
             let attachments = try makeImageAttachments(from: attachmentInputs)
             let response = try await state.session.respond(options: options) {
                 promptString

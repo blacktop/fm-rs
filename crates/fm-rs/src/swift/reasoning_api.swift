@@ -54,9 +54,9 @@ private func respondWithReasoning(
 
     do {
         let (content, usageJson) = if let timeoutMs {
-            try AsyncWaiter.wait(timeoutMs: timeoutMs, operation)
+            try AsyncWaiter.wait(session: state, timeoutMs: timeoutMs, operation)
         } else {
-            try AsyncWaiter.wait(operation)
+            try AsyncWaiter.wait(session: state, operation)
         }
         state.setLastResponseUsage(usageJson)
         return strdup(content)
