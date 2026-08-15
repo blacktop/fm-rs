@@ -572,7 +572,7 @@ impl Session {
         on_chunk: F,
     ) -> Result<()>
     where
-        F: FnMut(&str) + Send + 'static,
+        F: FnMut(&str) + Send,
     {
         let prompt_c = CString::new(prompt)?;
         let options_json = options.to_json();
@@ -1165,7 +1165,7 @@ impl Session {
         on_chunk: F,
     ) -> Result<()>
     where
-        F: FnMut(&str) + Send + 'static,
+        F: FnMut(&str) + Send,
     {
         let prompt_c = CString::new(prompt)?;
         let schema_json = serde_json::to_string(schema)?;
@@ -1261,7 +1261,7 @@ unsafe impl Send for CancellationHandle {}
 unsafe impl Sync for CancellationHandle {}
 
 /// Type alias for the chunk callback function.
-type ChunkCallbackFn = dyn FnMut(&str) + Send;
+type ChunkCallbackFn<'a> = dyn FnMut(&str) + Send + 'a;
 
 /// An image input for Foundation Models 27 multimodal prompting.
 ///
@@ -1475,8 +1475,8 @@ pub enum TranscriptErrorHandlingPolicy {
 }
 
 /// Internal state for streaming callbacks.
-struct StreamState {
-    on_chunk: Mutex<Box<ChunkCallbackFn>>,
+struct StreamState<'a> {
+    on_chunk: Mutex<Box<ChunkCallbackFn<'a>>>,
     error: Mutex<Option<(c_int, String)>>,
 }
 
