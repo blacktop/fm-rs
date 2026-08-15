@@ -107,7 +107,10 @@ pub struct ContextUsage {
     pub reserved_response_tokens: usize,
     /// Estimated tokens available for prompts before hitting the limit.
     pub available_tokens: usize,
-    /// Estimated utilization ratio (0.0 - 1.0+).
+    /// Estimated utilization of the available budget (0.0 - 1.0+).
+    ///
+    /// Measured against `available_tokens` (the window minus the reserved
+    /// response budget), so `utilization >= 1.0` exactly when `over_limit`.
     pub utilization: f32,
     /// Whether the estimate exceeds the available budget.
     pub over_limit: bool,
@@ -166,10 +169,12 @@ pub fn context_usage_from_transcript(
     let available_tokens = limit
         .max_tokens
         .saturating_sub(limit.reserved_response_tokens);
-    let utilization = if limit.max_tokens == 0 {
-        0.0
+    let utilization = if available_tokens > 0 {
+        estimated_tokens as f32 / available_tokens as f32
+    } else if estimated_tokens > 0 {
+        1.0
     } else {
-        estimated_tokens as f32 / limit.max_tokens as f32
+        0.0
     };
     let over_limit = estimated_tokens > available_tokens;
 
