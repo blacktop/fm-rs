@@ -995,11 +995,27 @@ public func fm_session_stream(
         do {
             let stream = state.session.streamResponse(to: promptString, options: options)
 
+            // The framework yields cumulative snapshots; emit only the newly
+            // generated suffix so Rust callers receive incremental chunks.
+            var emittedContent = ""
+
             for try await partialResponse in stream {
                 let content = partialResponse.content
-                callbackQueue.sync {
-                    content.withCString { ptr in
-                        callbacks.onChunk(callbacks.userData, ptr)
+                let delta: String
+                if content.hasPrefix(emittedContent) {
+                    delta = String(content.dropFirst(emittedContent.count))
+                } else {
+                    // The snapshot was rewritten rather than extended; emit it
+                    // whole rather than losing the revision.
+                    delta = content
+                }
+                emittedContent = content
+
+                if !delta.isEmpty {
+                    callbackQueue.sync {
+                        delta.withCString { ptr in
+                            callbacks.onChunk(callbacks.userData, ptr)
+                        }
                     }
                 }
 

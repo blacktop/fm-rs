@@ -594,7 +594,8 @@ impl Session {
     /// Sends a prompt and streams the response.
     ///
     /// The `on_chunk` callback is called for each text chunk as it arrives.
-    /// This method blocks until streaming is complete.
+    /// Chunks are incremental: concatenating every chunk yields the full
+    /// response. This method blocks until streaming is complete.
     ///
     /// # Example
     ///
@@ -1193,8 +1194,11 @@ impl Session {
 
     /// Streams a structured JSON response.
     ///
-    /// The `on_chunk` callback receives partial JSON as it's generated.
-    /// Note that partial chunks may not be valid JSON until streaming completes.
+    /// Unlike [`stream_response`](Self::stream_response), `on_chunk` receives
+    /// the *cumulative* partial JSON generated so far on each call, not an
+    /// incremental delta — render each snapshot in place rather than
+    /// concatenating them. Partial snapshots may not be valid JSON until
+    /// streaming completes.
     ///
     /// # Example
     ///
