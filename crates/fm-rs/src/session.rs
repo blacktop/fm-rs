@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,14 +20,12 @@ type ToolMapInner = HashMap<String, Arc<dyn Tool>>;
 
 /// Callback data shared between the session and tool callbacks.
 ///
-/// This struct ensures safe cleanup by tracking active callbacks and
-/// preventing new callbacks from starting when the session is being dropped.
+/// Lifetime is reference-counted from both sides: the `Session` holds one
+/// strong reference and Swift's `ToolDispatcher` holds another. Any in-flight
+/// callback runs inside a dispatcher method, so ARC keeps this alive for the
+/// duration of every callback — no additional handshake is needed.
 struct ToolCallbackData {
     tools: Mutex<ToolMapInner>,
-    /// Set to true when the session is being dropped.
-    dropping: AtomicBool,
-    /// Number of callbacks currently in progress.
-    active_callbacks: AtomicUsize,
 }
 
 /// Release the [`ToolCallbackData`] strong reference handed to Swift.
@@ -47,18 +44,9 @@ pub unsafe extern "C" fn fm_rust_tool_data_free(user_data: *mut c_void) {
     if user_data.is_null() {
         return;
     }
-    // Drops one strong reference. `Session::tool_callback_data` holds the
-    // other, so whichever side goes last frees the allocation.
+    // Drops the dispatcher's strong reference — the only one on the success
+    // path — freeing the allocation and every `Arc<dyn Tool>` in its map.
     drop(unsafe { Arc::from_raw(user_data as *const ToolCallbackData) });
-}
-
-/// RAII guard to track active callbacks.
-struct CallbackGuard<'a>(&'a AtomicUsize);
-
-impl Drop for CallbackGuard<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 /// Response returned by the model.
@@ -124,9 +112,6 @@ impl std::fmt::Display for Response {
 /// ```
 pub struct Session {
     ptr: NonNull<c_void>,
-    /// Arc to the callback data, shared with the FFI callback.
-    /// Using Arc ensures the data stays alive while callbacks are in flight.
-    tool_callback_data: Option<Arc<ToolCallbackData>>,
 }
 
 /// Apple's built-in system tools for sessions (Foundation Models 27).
@@ -278,18 +263,13 @@ impl Session {
             return Err(error_from_swift(error));
         }
 
-        NonNull::new(ptr)
-            .map(|ptr| Self {
-                ptr,
-                tool_callback_data: None,
-            })
-            .ok_or_else(|| {
-                Error::InternalError(
-                    "Session creation from transcript returned null without error. \
-                     The transcript JSON may be malformed or incompatible."
-                        .to_string(),
-                )
-            })
+        NonNull::new(ptr).map(|ptr| Self { ptr }).ok_or_else(|| {
+            Error::InternalError(
+                "Session creation from transcript returned null without error. \
+                 The transcript JSON may be malformed or incompatible."
+                    .to_string(),
+            )
+        })
     }
 
     /// Internal helper to create a session.
@@ -322,21 +302,15 @@ impl Session {
         };
         let tools_ptr = tools_json.as_ref().map_or(ptr::null(), |s| s.as_ptr());
 
-        // Create callback data with synchronization primitives
-        let callback_data = if tools.is_empty() {
-            None
+        // Transfer one strong reference to Swift's ToolDispatcher, which
+        // reclaims it in deinit via fm_rust_tool_data_free.
+        let user_data = if tools.is_empty() {
+            ptr::null_mut()
         } else {
-            Some(Arc::new(ToolCallbackData {
+            Arc::into_raw(Arc::new(ToolCallbackData {
                 tools: Mutex::new(tool_map),
-                dropping: AtomicBool::new(false),
-                active_callbacks: AtomicUsize::new(0),
-            }))
+            })) as *mut c_void
         };
-
-        // Get user_data pointer for FFI (we leak an Arc clone that Swift holds)
-        let user_data = callback_data.as_ref().map_or(ptr::null_mut(), |arc| {
-            Arc::into_raw(Arc::clone(arc)) as *mut c_void
-        });
 
         let mut error: SwiftPtr = ptr::null_mut();
 
@@ -360,22 +334,17 @@ impl Session {
             return Err(error_from_swift(error));
         }
 
-        NonNull::new(ptr)
-            .map(|ptr| Self {
-                ptr,
-                tool_callback_data: callback_data,
-            })
-            .ok_or_else(|| {
-                // Clean up leaked Arc if we allocated it
-                if !user_data.is_null() {
-                    let _ = unsafe { Arc::from_raw(user_data as *const ToolCallbackData) };
-                }
-                Error::InternalError(
-                    "Session creation returned null without error. \
-                     Check model availability and instructions validity."
-                        .to_string(),
-                )
-            })
+        NonNull::new(ptr).map(|ptr| Self { ptr }).ok_or_else(|| {
+            // Clean up leaked Arc if we allocated it
+            if !user_data.is_null() {
+                let _ = unsafe { Arc::from_raw(user_data as *const ToolCallbackData) };
+            }
+            Error::InternalError(
+                "Session creation returned null without error. \
+                 Check model availability and instructions validity."
+                    .to_string(),
+            )
+        })
     }
 
     /// Sends a prompt and waits for the complete response.
@@ -1275,26 +1244,14 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // Signal that we're dropping - new callbacks will return early
-        if let Some(ref callback_data) = self.tool_callback_data {
-            callback_data.dropping.store(true, Ordering::SeqCst);
-
-            // Wait for any in-flight callbacks to complete (with timeout)
-            let mut attempts = 0;
-            while callback_data.active_callbacks.load(Ordering::SeqCst) > 0 && attempts < 100 {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                attempts += 1;
-            }
-        }
-
-        // Now safe to free the Swift session
         unsafe {
             ffi::fm_session_free(self.ptr.as_ptr());
         }
 
-        // The Arc in tool_callback_data will be dropped automatically.
-        // Swift also holds an Arc clone (via Arc::into_raw), which will be
-        // reclaimed when Swift's ToolDispatcher is deallocated.
+        // Swift's ToolDispatcher owns the ToolCallbackData reference (via
+        // Arc::into_raw) and reclaims it in deinit; any in-flight tool
+        // callback runs inside a dispatcher method, so the data outlives
+        // every callback.
     }
 }
 
@@ -1611,21 +1568,11 @@ extern "C" fn session_tool_callback(
     }
 
     // user_data is a raw pointer to Arc<ToolCallbackData> (from Arc::into_raw)
-    // SAFETY: Swift holds a reference to this Arc, keeping it alive.
-    // We must NOT consume the Arc here - just borrow it.
+    // SAFETY: Swift's ToolDispatcher holds a strong reference to this Arc and
+    // is the object invoking this callback, so ARC keeps the data alive for
+    // the duration of the call. We must NOT consume the Arc here - just
+    // borrow it.
     let callback_data = unsafe { &*(user_data as *const ToolCallbackData) };
-
-    // Check if session is being dropped - if so, return early
-    if callback_data.dropping.load(Ordering::SeqCst) {
-        let result = ToolResult::error("Session is being dropped");
-        return string_to_c(result.to_json());
-    }
-
-    // Track that we're in a callback (guard ensures cleanup on all exit paths)
-    callback_data
-        .active_callbacks
-        .fetch_add(1, Ordering::SeqCst);
-    let _guard = CallbackGuard(&callback_data.active_callbacks);
 
     let name = unsafe { CStr::from_ptr(tool_name).to_string_lossy().into_owned() };
     let args_str = if arguments_json.is_null() {
