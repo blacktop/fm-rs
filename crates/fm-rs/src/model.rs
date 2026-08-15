@@ -543,7 +543,9 @@ unsafe fn take_error_string(ptr: *mut std::ffi::c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    let value = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+    let value = unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned();
     unsafe { ffi::fm_string_free(ptr) };
     Some(value)
 }

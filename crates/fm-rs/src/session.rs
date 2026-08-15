@@ -1513,13 +1513,11 @@ extern "C" fn stream_chunk_callback(user_data: *mut c_void, chunk: *const c_char
     }))
     .is_err();
 
-    if panicked {
-        if let Ok(mut error) = state.error.lock() {
-            error.get_or_insert((
-                ffi::ErrorCode::Unknown as c_int,
-                "Stream chunk callback panicked".to_string(),
-            ));
-        }
+    if panicked && let Ok(mut error) = state.error.lock() {
+        error.get_or_insert((
+            ffi::ErrorCode::Unknown as c_int,
+            "Stream chunk callback panicked".to_string(),
+        ));
     }
 }
 
@@ -1601,13 +1599,12 @@ extern "C" fn session_tool_callback(
 
     // Invoke the tool. A panic here would unwind into Swift and abort the
     // process; report it as a tool error so the model (and caller) can react.
-    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tool.call(arguments)
-    })) {
-        Ok(Ok(output)) => ToolResult::success(output),
-        Ok(Err(e)) => ToolResult::error(e.to_string()),
-        Err(_) => ToolResult::error(format!("Tool '{name}' panicked")),
-    };
+    let result =
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool.call(arguments))) {
+            Ok(Ok(output)) => ToolResult::success(output),
+            Ok(Err(e)) => ToolResult::error(e.to_string()),
+            Err(_) => ToolResult::error(format!("Tool '{name}' panicked")),
+        };
 
     string_to_c(result.to_json())
 }

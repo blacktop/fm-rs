@@ -678,6 +678,16 @@ private func stringPropertyNames(inSchemaJson schemaJson: String) -> Set<String>
     return names
 }
 
+/// Property names listed in the schema's `"required"` array.
+private func requiredPropertyNames(inSchemaJson schemaJson: String) -> [String] {
+    guard let data = schemaJson.data(using: .utf8),
+          let schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let required = schema["required"] as? [String] else {
+        return []
+    }
+    return required
+}
+
 private func parseJsonFragment(_ text: String) -> Any? {
     guard let data = text.data(using: .utf8) else { return nil }
     return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
@@ -692,6 +702,7 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
     private let dispatcher: ToolDispatcher
     private let toolDescriptions: String
     private let stringPropertiesByTool: [String: Set<String>]
+    private let requiredPropertiesByTool: [String: [String]]
 
     /// Creates a bridge with the given dispatcher and tool descriptions for the schema.
     init(dispatcher: ToolDispatcher) {
@@ -707,10 +718,13 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
         self.toolDescriptions = descriptions
 
         var stringProperties: [String: Set<String>] = [:]
+        var requiredProperties: [String: [String]] = [:]
         for def in dispatcher.toolDefinitions {
             stringProperties[def.name] = stringPropertyNames(inSchemaJson: def.argumentsSchemaJson)
+            requiredProperties[def.name] = requiredPropertyNames(inSchemaJson: def.argumentsSchemaJson)
         }
         self.stringPropertiesByTool = stringProperties
+        self.requiredPropertiesByTool = requiredProperties
     }
 
     var name: String { "invoke_tool" }
@@ -738,6 +752,18 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
         if toolName.isEmpty {
             throw ToolError(message: "Missing tool name")
         }
+        // The model sometimes omits required arguments; feed the omission back
+        // as the tool output so it can retry with the full set instead of the
+        // tool silently running on defaults.
+        let provided = Set(arguments.arguments.map(\.name))
+        let missing = (requiredPropertiesByTool[toolName] ?? []).filter { !provided.contains($0) }
+        if !missing.isEmpty {
+            return """
+            Error: missing required argument(s) \(missing.joined(separator: ", ")) for tool \
+            "\(toolName)". Call the tool again providing every required argument.
+            """
+        }
+
         let argsJson = buildArgumentsJson(
             arguments.arguments,
             stringProperties: stringPropertiesByTool[toolName] ?? []
