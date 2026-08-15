@@ -175,9 +175,10 @@ On the observed 8,192-token on-device context window, enable one built-in
 system tool at a time. Combined tool schemas can exhaust the context window
 before the prompt is processed.
 
-For vision tools, give each image attachment a meaningful `.with_label(...)`
-and refer to that same label in the prompt. The example below uses `receipt` in
-both places.
+For reliable image-tool invocation (OCR, barcode), assign attachments a label
+with `.with_label(...)` and reference that exact label in the prompt. Without
+an explicit label, the model may request an image label that does not exist and
+the tool call fails. The example below uses `receipt` in both places.
 
 ```rust
 use fm_rs::{

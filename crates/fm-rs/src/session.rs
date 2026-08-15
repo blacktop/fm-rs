@@ -121,12 +121,40 @@ pub struct Session {
 ///
 /// These tools run inside the framework; unlike [`Tool`] implementations,
 /// they never call back into Rust. All use Apple's default configuration.
+///
+/// For reliable image-tool invocation, assign attachments a label with
+/// [`Attachment::with_label`] and reference that exact label in the prompt.
+/// Without an explicit label, the model may request an image label that does
+/// not exist and the tool call fails.
+///
+/// ```rust,no_run
+/// use fm_rs::{Attachment, GenerationOptions, Session, SystemLanguageModel, SystemTool};
+///
+/// let model = SystemLanguageModel::new()?;
+/// let session = Session::builder(&model)
+///     .system_tool(SystemTool::BarcodeReader)
+///     .build()?;
+///
+/// let response = session.respond_with_attachments(
+///     "Read the barcode in the attached image labeled \"qr\" and report its payload.",
+///     &[Attachment::file("qr.png").with_label("qr")],
+///     &GenerationOptions::default(),
+/// )?;
+/// println!("{}", response.content());
+/// # Ok::<(), fm_rs::Error>(())
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SystemTool {
     /// Vision text recognition over image attachments.
+    ///
+    /// Label attachments with [`Attachment::with_label`] and reference the
+    /// label in the prompt (see the enum-level example).
     Ocr,
     /// Vision barcode and QR-code reading over image attachments.
+    ///
+    /// Label attachments with [`Attachment::with_label`] and reference the
+    /// label in the prompt (see the enum-level example).
     BarcodeReader,
     /// Core Spotlight semantic search over the device index.
     SpotlightSearch,
