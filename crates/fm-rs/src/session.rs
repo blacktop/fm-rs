@@ -31,6 +31,27 @@ struct ToolCallbackData {
     active_callbacks: AtomicUsize,
 }
 
+/// Release the [`ToolCallbackData`] strong reference handed to Swift.
+///
+/// `Session::create_internal` gives Swift ownership of one `Arc` clone via
+/// `Arc::into_raw`, so something has to give it back. `ToolDispatcher.deinit`
+/// calls this when the dispatcher is deallocated.
+///
+/// # Safety
+///
+/// `user_data` must be null, or a pointer from `Arc::into_raw` on an
+/// `Arc<ToolCallbackData>` that has not already been reclaimed. Swift calls
+/// this exactly once per dispatcher, from `deinit`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fm_rust_tool_data_free(user_data: *mut c_void) {
+    if user_data.is_null() {
+        return;
+    }
+    // Drops one strong reference. `Session::tool_callback_data` holds the
+    // other, so whichever side goes last frees the allocation.
+    drop(unsafe { Arc::from_raw(user_data as *const ToolCallbackData) });
+}
+
 /// RAII guard to track active callbacks.
 struct CallbackGuard<'a>(&'a AtomicUsize);
 

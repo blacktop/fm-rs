@@ -490,6 +490,14 @@ private struct ToolResultDTO: Decodable {
 
 // MARK: - Dynamic Tool Dispatcher
 
+/// Releases the Rust-side `Arc<ToolCallbackData>` that `userData` points at.
+///
+/// Defined in Rust (`session.rs`) and linked into the same binary. Declared here
+/// rather than passed as a function pointer so `fm_session_create`'s C signature
+/// is unchanged.
+@_silgen_name("fm_rust_tool_data_free")
+func fm_rust_tool_data_free(_ userData: UnsafeMutableRawPointer?)
+
 /// Stores tool context for callback dispatch
 final class ToolDispatcher: @unchecked Sendable {
     let toolDefinitions: [ToolDefinitionDTO]
@@ -500,6 +508,16 @@ final class ToolDispatcher: @unchecked Sendable {
         self.toolDefinitions = toolDefinitions
         self.userData = userData
         self.callback = callback
+    }
+
+    /// Hands the Rust `Arc` clone back so it can be dropped.
+    ///
+    /// Rust transfers ownership of one strong reference into `userData` when the
+    /// session is created. Without this the reference — and every `Arc<dyn Tool>`
+    /// in its map — lived for the life of the process, once per tool-enabled
+    /// session.
+    deinit {
+        fm_rust_tool_data_free(userData)
     }
 
     func callTool(name: String, argumentsJson: String) throws -> String {
@@ -722,6 +740,7 @@ final class SessionState: @unchecked Sendable {
         self.session = session
         self.toolDispatcher = toolDispatcher
     }
+
 
     /// Records per-response usage; nil clears it (fallback builds/runtimes).
     func setLastResponseUsage(_ json: String?) {
