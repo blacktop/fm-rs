@@ -178,8 +178,15 @@ pub struct SystemLanguageModel {
 /// Token usage returned by `SystemLanguageModel` 26.4+ APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenUsage {
-    /// Number of tokens reported by the framework.
+    /// Number of tokens, either measured by the framework tokenizer or
+    /// estimated locally (see [`estimated`](Self::estimated)).
     pub token_count: usize,
+    /// Whether `token_count` is a local chars-per-token estimate rather than
+    /// a framework tokenizer measurement.
+    ///
+    /// `true` when the build SDK or runtime lacks the token-usage APIs and
+    /// the count was derived heuristically (~4 characters per token).
+    pub estimated: bool,
 }
 
 impl SystemLanguageModel {
@@ -250,7 +257,11 @@ impl SystemLanguageModel {
 
         if token_count == TOKEN_USAGE_UNAVAILABLE_SENTINEL {
             return Ok(TokenUsage {
-                token_count: estimate_tokens(prompt, TOKEN_ESTIMATE_CHARS_PER_TOKEN),
+                token_count: crate::context::estimate_tokens(
+                    prompt,
+                    TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+                ),
+                estimated: true,
             });
         }
 
@@ -291,12 +302,17 @@ impl SystemLanguageModel {
         }
 
         if token_count == TOKEN_USAGE_UNAVAILABLE_SENTINEL {
-            let fallback = estimate_tokens(instructions, TOKEN_ESTIMATE_CHARS_PER_TOKEN)
-                + tools_json.as_ref().map_or(0, |json| {
-                    estimate_tokens(&json.to_string_lossy(), TOKEN_ESTIMATE_CHARS_PER_TOKEN)
-                });
+            let fallback =
+                crate::context::estimate_tokens(instructions, TOKEN_ESTIMATE_CHARS_PER_TOKEN)
+                    + tools_json.as_ref().map_or(0, |json| {
+                        crate::context::estimate_tokens(
+                            &json.to_string_lossy(),
+                            TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+                        )
+                    });
             return Ok(TokenUsage {
                 token_count: fallback,
+                estimated: true,
             });
         }
 
@@ -511,13 +527,10 @@ fn token_usage_from_raw(token_count: i64) -> Result<TokenUsage> {
     let token_count = usize::try_from(token_count)
         .map_err(|_| Error::InternalError("Token usage value does not fit in usize".to_string()))?;
 
-    Ok(TokenUsage { token_count })
-}
-
-fn estimate_tokens(text: &str, chars_per_token: usize) -> usize {
-    let denom = chars_per_token.max(1);
-    let chars = text.chars().count();
-    chars.div_ceil(denom)
+    Ok(TokenUsage {
+        token_count,
+        estimated: false,
+    })
 }
 
 /// Copies and frees a Swift-allocated (`strdup`) error string, or returns
@@ -615,9 +628,7 @@ mod tests {
 
     use crate::error::Error;
     use crate::ffi::{AvailabilityCode, ErrorCode};
-    use crate::model::{
-        ModelAvailability, error_from_parts, estimate_tokens, token_usage_from_raw,
-    };
+    use crate::model::{ModelAvailability, error_from_parts, token_usage_from_raw};
     #[cfg(feature = "private-cloud-compute")]
     use crate::model::{QuotaStatus, quota_usage_from_json, unix_seconds_to_system_time};
 
@@ -682,18 +693,13 @@ mod tests {
     fn token_usage_should_convert_positive_values() {
         let usage = token_usage_from_raw(42).expect("positive token count should convert");
         assert_eq!(usage.token_count, 42);
+        assert!(!usage.estimated);
     }
 
     #[test]
     fn token_usage_should_reject_negative_values() {
         let err = token_usage_from_raw(-1).expect_err("negative token count should fail");
         assert!(err.to_string().contains("negative token count"));
-    }
-
-    #[test]
-    fn estimate_tokens_should_use_div_ceil() {
-        assert_eq!(estimate_tokens("abcd", 4), 1);
-        assert_eq!(estimate_tokens("abcde", 4), 2);
     }
 
     #[test]
