@@ -381,14 +381,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let s = cstr
-                .to_str()
-                .map_err(|e| Error::GenerationError(format!("Invalid UTF-8 in response: {e}")))?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            s
-        };
+            take_swift_string(response_ptr, |e| {
+                Error::GenerationError(format!("Invalid UTF-8 in response: {e}"))
+            })
+        }?;
 
         Ok(Response::with_usage(
             content,
@@ -433,16 +429,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let content = cstr
-                .to_str()
-                .map_err(|error| {
-                    Error::GenerationError(format!("Invalid UTF-8 in reasoning response: {error}"))
-                })?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            content
-        };
+            take_swift_string(response_ptr, |error| {
+                Error::GenerationError(format!("Invalid UTF-8 in reasoning response: {error}"))
+            })
+        }?;
 
         Ok(Response::with_usage(
             content,
@@ -493,16 +483,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let content = cstr
-                .to_str()
-                .map_err(|error| {
-                    Error::GenerationError(format!("Invalid UTF-8 in reasoning response: {error}"))
-                })?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            content
-        };
+            take_swift_string(response_ptr, |error| {
+                Error::GenerationError(format!("Invalid UTF-8 in reasoning response: {error}"))
+            })
+        }?;
 
         Ok(Response::with_usage(
             content,
@@ -551,14 +535,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let s = cstr
-                .to_str()
-                .map_err(|e| Error::GenerationError(format!("Invalid UTF-8 in response: {e}")))?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            s
-        };
+            take_swift_string(response_ptr, |e| {
+                Error::GenerationError(format!("Invalid UTF-8 in response: {e}"))
+            })
+        }?;
 
         Ok(Response::with_usage(
             content,
@@ -679,16 +659,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let content = cstr
-                .to_str()
-                .map_err(|error| {
-                    Error::GenerationError(format!("Invalid UTF-8 in multimodal response: {error}"))
-                })?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            content
-        };
+            take_swift_string(response_ptr, |error| {
+                Error::GenerationError(format!("Invalid UTF-8 in multimodal response: {error}"))
+            })
+        }?;
 
         Ok(Response::with_usage(
             content,
@@ -880,17 +854,11 @@ impl Session {
             ));
         }
 
-        let json = unsafe {
-            let cstr = CStr::from_ptr(ptr);
-            let s = cstr
-                .to_str()
-                .map_err(|e| Error::InternalError(format!("Invalid UTF-8 in transcript: {e}")))?
-                .to_owned();
-            ffi::fm_string_free(ptr);
-            s
-        };
-
-        Ok(json)
+        unsafe {
+            take_swift_string(ptr, |e| {
+                Error::InternalError(format!("Invalid UTF-8 in transcript: {e}"))
+            })
+        }
     }
 
     /// Estimates current context usage based on the session transcript.
@@ -999,16 +967,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let s = cstr
-                .to_str()
-                .map_err(|e| {
-                    Error::GenerationError(format!("Invalid UTF-8 in JSON response: {e}"))
-                })?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            s
-        };
+            take_swift_string(response_ptr, |e| {
+                Error::GenerationError(format!("Invalid UTF-8 in JSON response: {e}"))
+            })
+        }?;
 
         Ok(content)
     }
@@ -1092,16 +1054,10 @@ impl Session {
         }
 
         let content = unsafe {
-            let cstr = CStr::from_ptr(response_ptr);
-            let content = cstr
-                .to_str()
-                .map_err(|error| {
-                    Error::GenerationError(format!("Invalid UTF-8 in JSON response: {error}"))
-                })?
-                .to_owned();
-            ffi::fm_string_free(response_ptr);
-            content
-        };
+            take_swift_string(response_ptr, |error| {
+                Error::GenerationError(format!("Invalid UTF-8 in JSON response: {error}"))
+            })
+        }?;
 
         Ok(Response::with_usage(
             content,
@@ -1640,6 +1596,22 @@ extern "C" fn session_tool_callback(
     };
 
     string_to_c(result.to_json())
+}
+
+/// Copies a Swift-allocated (`strdup`) C string and always frees it, even
+/// when the contents are not valid UTF-8.
+///
+/// # Safety
+///
+/// `ptr` must be a non-null, NUL-terminated allocation owned by the caller
+/// and freeable with `fm_string_free`.
+unsafe fn take_swift_string(
+    ptr: *mut c_char,
+    make_error: impl FnOnce(std::str::Utf8Error) -> Error,
+) -> Result<String> {
+    let converted = unsafe { CStr::from_ptr(ptr) }.to_str().map(str::to_owned);
+    unsafe { ffi::fm_string_free(ptr) };
+    converted.map_err(make_error)
 }
 
 /// Helper to convert a Rust string to a C string that can be freed by Swift.
