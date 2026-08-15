@@ -786,7 +786,7 @@ private struct ToolDefinitionError: Error {
 final class SessionState: @unchecked Sendable {
     let session: LanguageModelSession
     let toolDispatcher: ToolDispatcher?
-    var currentTask: Task<Void, Never>?
+    private var currentTask: Task<Void, Never>?
     private let lock = NSLock()
     private var lastResponseUsageJsonStorage: String?
 
@@ -885,6 +885,10 @@ public func fm_session_create(
         }
         return nil
     }
+    // INVARIANT: every fallible step must precede ToolDispatcher construction.
+    // Rust reclaims the userData Arc when this function returns nil, and the
+    // dispatcher's deinit reclaims it again — an error return after this point
+    // would double-free.
     let toolDispatcher: ToolDispatcher?
     let toolBridge: GenericToolBridge?
 
@@ -1035,6 +1039,11 @@ public func fm_session_stream(
     let state = Unmanaged<AnyObject>.fromOpaque(sessionPtr).takeUnretainedValue() as! SessionState
     let promptString = String(cString: prompt)
     let options = parseGenerationOptions(optionsJson)
+
+    // Streaming records no per-response usage; clear any value left by a
+    // previous blocking response so fm_session_last_response_usage cannot
+    // return stale data.
+    state.setLastResponseUsage(nil)
 
     let callbackQueue = DispatchQueue(label: "fm.ffi.callbacks", qos: .userInteractive)
     let callbacks = StreamCallbackContext(
@@ -1208,20 +1217,6 @@ public func fm_session_prewarm(_ sessionPtr: UnsafeMutableRawPointer, _ promptPr
 
 // MARK: - Generation Options
 
-/// Creates generation options from JSON.
-@_cdecl("fm_generation_options_create")
-public func fm_generation_options_create(_ optionsJson: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer {
-    let options = parseGenerationOptions(optionsJson)
-    return Unmanaged.passRetained(options as AnyObject).toOpaque()
-}
-
-/// Frees generation options.
-@_cdecl("fm_generation_options_free")
-public func fm_generation_options_free(_ optionsPtr: UnsafeMutableRawPointer?) {
-    guard let optionsPtr = optionsPtr else { return }
-    Unmanaged<AnyObject>.fromOpaque(optionsPtr).release()
-}
-
 /// Parses generation options from JSON string.
 func parseGenerationOptions(_ optionsJson: UnsafePointer<CChar>?) -> GenerationOptions {
     guard let optionsJson = optionsJson else {
@@ -1380,6 +1375,11 @@ public func fm_session_stream_json(
     let options = parseGenerationOptions(optionsJson)
 
     let formattedPrompt = structuredPrompt(promptString, schema: schemaString)
+
+    // Streaming records no per-response usage; clear any value left by a
+    // previous blocking response so fm_session_last_response_usage cannot
+    // return stale data.
+    state.setLastResponseUsage(nil)
 
     let callbackQueue = DispatchQueue(label: "fm.ffi.callbacks.json", qos: .userInteractive)
     let callbacks = StreamCallbackContext(
