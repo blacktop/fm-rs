@@ -742,7 +742,21 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
             arguments.arguments,
             stringProperties: stringPropertiesByTool[toolName] ?? []
         )
-        return try dispatcher.callTool(name: toolName, argumentsJson: argsJson)
+        // callTool blocks in synchronous Rust user code; run it on a Dispatch
+        // thread so it cannot starve the cooperative pool (a Rust tool that
+        // re-enters this library needs a pool thread to make progress).
+        let dispatcher = self.dispatcher
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(
+                        returning: try dispatcher.callTool(name: toolName, argumentsJson: argsJson)
+                    )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 }
 
