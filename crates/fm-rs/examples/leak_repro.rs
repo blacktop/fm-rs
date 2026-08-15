@@ -23,18 +23,35 @@ impl Drop for Counted {
 }
 
 impl Tool for Counted {
-    fn name(&self) -> &str { "counted" }
-    fn description(&self) -> &str { "does nothing; counts its own drop" }
-    fn arguments_schema(&self) -> serde_json::Value { serde_json::json!({"type":"object"}) }
-    fn call(&self, _args: serde_json::Value) -> Result<ToolOutput> { Ok(ToolOutput::new("{}")) }
+    fn name(&self) -> &'static str {
+        "counted"
+    }
+
+    fn description(&self) -> &'static str {
+        "does nothing; counts its own drop"
+    }
+
+    fn arguments_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn call(&self, _args: serde_json::Value) -> Result<ToolOutput> {
+        Ok(ToolOutput::new("{}"))
+    }
 }
 
 fn main() {
     let model = match SystemLanguageModel::new() {
         Ok(m) if m.is_available() => m,
-        _ => { println!("SKIP: Foundation Models unavailable"); return; }
+        _ => {
+            println!("SKIP: Foundation Models unavailable");
+            return;
+        }
     };
-    let n: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(50);
+    let n: usize = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
 
     for _ in 0..n {
         let session = Session::builder(&model).tool(Arc::new(Counted)).build();
@@ -46,7 +63,11 @@ fn main() {
     println!("tools dropped:            {dropped}");
     println!(
         "verdict: {}",
-        if dropped == n { "OK — every tool reclaimed" } else { "LEAK — tools never reclaimed" }
+        if dropped == n {
+            "OK — every tool reclaimed"
+        } else {
+            "LEAK — tools never reclaimed"
+        }
     );
-    std::process::exit(if dropped == n { 0 } else { 1 });
+    std::process::exit(i32::from(dropped != n));
 }
