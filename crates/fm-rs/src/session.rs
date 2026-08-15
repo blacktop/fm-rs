@@ -445,6 +445,12 @@ impl Session {
     /// If `timeout` is zero, this behaves like
     /// [`respond_with_reasoning`](Self::respond_with_reasoning).
     /// Positive sub-millisecond timeouts are rounded up to one millisecond.
+    ///
+    /// Timeout cancellation is cooperative: the abandoned generation may keep
+    /// running in the background, in which case new requests report
+    /// [`Error::ConcurrentRequests`] until it finishes, and an
+    /// already-dispatched tool call may still run (side effects included)
+    /// after this method has returned [`Error::Timeout`].
     pub fn respond_with_reasoning_timeout(
         &self,
         prompt: &str,
@@ -498,6 +504,12 @@ impl Session {
     ///
     /// If `timeout` is zero, this behaves like [`respond`](Self::respond).
     /// Positive sub-millisecond timeouts are rounded up to one millisecond.
+    ///
+    /// Timeout cancellation is cooperative: the abandoned generation may keep
+    /// running in the background, in which case new requests report
+    /// [`Error::ConcurrentRequests`] until it finishes, and an
+    /// already-dispatched tool call may still run (side effects included)
+    /// after this method has returned [`Error::Timeout`].
     pub fn respond_with_timeout(
         &self,
         prompt: &str,
@@ -985,7 +997,9 @@ impl Session {
     ///
     /// The timeout bounds only the caller's wait. On expiry, the bridge requests cooperative
     /// task cancellation and returns [`Error::Timeout`]; it cannot force Foundation Models
-    /// framework work to stop immediately.
+    /// framework work to stop immediately. While the abandoned generation drains, new
+    /// requests report [`Error::ConcurrentRequests`], and an already-dispatched tool call
+    /// may still run (side effects included) after this method has returned.
     ///
     /// # Example
     ///
@@ -1628,14 +1642,7 @@ fn parse_tool_arguments(input: &str) -> std::result::Result<serde_json::Value, S
         Err(err) => {
             if let Some(fixed) = autoclose_json(input) {
                 match serde_json::from_str(&fixed) {
-                    Ok(value) => {
-                        // Log when auto-close fixes truncated JSON (debug builds only)
-                        #[cfg(debug_assertions)]
-                        eprintln!(
-                            "[fm-rs] autoclose_json repaired truncated tool arguments: {input:?} -> {fixed:?}"
-                        );
-                        Ok(value)
-                    }
+                    Ok(value) => Ok(value),
                     Err(fixed_err) => Err(format!(
                         "Failed to parse arguments: {err}; attempted fix: {fixed_err}"
                     )),

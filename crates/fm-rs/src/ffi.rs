@@ -30,7 +30,8 @@ unsafe extern "C" {
     // ========================================================================
 
     /// Creates the default `SystemLanguageModel`.
-    /// Returns null if not available; sets errorOut on failure.
+    /// Always returns a retained model box and never sets `error_out`;
+    /// check availability separately via `fm_model_availability`.
     pub fn fm_model_default(error_out: *mut SwiftPtr) -> SwiftPtr;
 
     /// Creates a Foundation Models 27 `PrivateCloudComputeLanguageModel`.
