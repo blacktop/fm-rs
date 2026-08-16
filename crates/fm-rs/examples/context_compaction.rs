@@ -33,6 +33,14 @@ fn main() -> Result<()> {
 
     // Use a small limit to force compaction in this example.
     let limit = ContextLimit::new(256).with_reserved_response_tokens(64);
+    let compaction_config = CompactionConfig {
+        max_summary_tokens: 64,
+        summary_options: GenerationOptions::builder()
+            .temperature(0.2)
+            .max_response_tokens(64)
+            .build(),
+        ..CompactionConfig::default()
+    };
     let usage = session.context_usage(&limit)?;
 
     println!(
@@ -46,7 +54,7 @@ fn main() -> Result<()> {
             &model,
             &session,
             &limit,
-            &CompactionConfig::default(),
+            &compaction_config,
             Some("You are a helpful assistant. Keep responses concise."),
         )? {
             println!("Summary:\n{}\n", compacted.summary);

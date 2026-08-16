@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::model::SystemLanguageModel;
 use crate::options::GenerationOptions;
 use crate::session::Session;
@@ -110,7 +110,8 @@ pub struct ContextUsage {
     /// Estimated utilization of the available budget (0.0 - 1.0+).
     ///
     /// Measured against `available_tokens` (the window minus the reserved
-    /// response budget), so `utilization >= 1.0` exactly when `over_limit`.
+    /// response budget). `over_limit` uses the exact integer counts and is
+    /// false at the boundary where utilization is 1.0.
     pub utilization: f32,
     /// Whether the estimate exceeds the available budget.
     pub over_limit: bool,
@@ -207,7 +208,7 @@ pub fn compact_transcript(
 
     let mut summary = String::new();
 
-    for chunk in chunks {
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
         let session = Session::with_instructions(model, &config.instructions)?;
         let prompt = build_summary_prompt(
             &summary,
@@ -217,11 +218,13 @@ pub fn compact_transcript(
         );
         let response = session.respond(&prompt, &config.summary_options)?;
         let updated = response.into_content();
-        // An empty response would silently discard every earlier chunk's
-        // content; keep the previous rolling summary instead.
-        if !updated.trim().is_empty() {
-            summary = updated;
+        if updated.trim().is_empty() {
+            return Err(Error::GenerationError(format!(
+                "Summarizer returned an empty response for transcript chunk {}",
+                chunk_index + 1
+            )));
         }
+        summary = updated;
     }
 
     Ok(summary)
@@ -251,15 +254,14 @@ pub fn compact_session_if_needed(
     let summary = compact_transcript(model, &transcript_json, config)?;
     let compacted = session_from_summary(model, base_instructions, &summary)?;
 
-    // If the compacted session still exceeds the budget, the base
-    // instructions alone are too large; report it rather than letting a
-    // caller's compact-until-under-limit loop spin forever.
+    // Report an ineffective compaction rather than letting a caller's
+    // compact-until-under-limit loop spin forever.
     let compacted_usage = compacted.context_usage(limit)?;
     if compacted_usage.over_limit {
         return Err(crate::error::Error::InvalidInput(format!(
             "Compacted session still exceeds the context budget \
              ({} estimated tokens > {} available); reduce the base \
-             instructions or max_summary_tokens",
+             instructions, max_summary_tokens, or summary response limit",
             compacted_usage.estimated_tokens, compacted_usage.available_tokens
         )));
     }
@@ -452,13 +454,25 @@ fn collect_transcript_lines(value: &Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::context::{chunk_text, compacted_instructions, estimate_tokens};
+    use crate::context::{
+        ContextLimit, chunk_text, compacted_instructions, context_usage_from_transcript,
+        estimate_tokens,
+    };
 
     #[test]
     fn test_estimate_tokens() {
         let text = "abcd";
         assert_eq!(estimate_tokens(text, 4), 1);
         assert_eq!(estimate_tokens(text, 3), 2);
+    }
+
+    #[test]
+    fn context_usage_at_available_token_boundary_is_not_over_limit() {
+        let usage = context_usage_from_transcript(r#"[{"content":"abcd"}]"#, &ContextLimit::new(1))
+            .expect("context usage should be estimated");
+
+        assert!((usage.utilization - 1.0).abs() < f32::EPSILON);
+        assert!(!usage.over_limit);
     }
 
     #[test]
