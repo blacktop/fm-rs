@@ -367,13 +367,16 @@ class Session:
     ) -> None:
         """Sends a prompt and streams the response.
 
+        Each callback value is an incremental text delta. Concatenating all
+        callback values yields the complete response.
+
         Args:
             prompt: The text prompt to send.
             on_chunk: A callable that receives each text chunk.
             options: Optional generation options.
 
         Raises:
-            GenerationError: If streaming fails.
+            GenerationError: If streaming fails or is cancelled.
         """
         ...
 
@@ -429,6 +432,9 @@ class Session:
     ) -> None:
         """Streams a structured JSON response.
 
+        Each callback value is the cumulative partial JSON generated so far,
+        not an incremental delta.
+
         Args:
             prompt: The text prompt to send.
             schema: A JSON Schema dict describing the expected output format.
@@ -436,7 +442,7 @@ class Session:
             options: Optional generation options.
 
         Raises:
-            GenerationError: If streaming fails.
+            GenerationError: If streaming fails or is cancelled.
         """
         ...
 

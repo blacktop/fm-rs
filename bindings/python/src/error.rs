@@ -165,7 +165,11 @@ pub fn to_py_err(err: fm_rs::Error) -> PyErr {
         }
         fm_rs::Error::ModelNotReady => ModelNotReadyError::new_err(err.to_string()),
         fm_rs::Error::InvalidInput(msg) => PyValueError::new_err(msg),
-        fm_rs::Error::GenerationError(msg) => GenerationError::new_err(msg),
+        // Preserve the documented Python contract: cancellation is a
+        // generation failure and remains catchable as GenerationError.
+        fm_rs::Error::GenerationError(msg) | fm_rs::Error::Cancelled(msg) => {
+            GenerationError::new_err(msg)
+        }
         fm_rs::Error::Timeout(msg) => PyTimeoutError::new_err(msg),
         fm_rs::Error::UnsupportedPlatform(msg) => UnsupportedPlatformError::new_err(msg),
         fm_rs::Error::NetworkFailure(msg) => NetworkFailureError::new_err(msg),

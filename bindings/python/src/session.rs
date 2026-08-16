@@ -368,7 +368,8 @@ impl Session {
 
     /// Sends a prompt and streams the response.
     ///
-    /// The `on_chunk` callback is called for each text chunk as it arrives.
+    /// The `on_chunk` callback receives incremental text deltas as they arrive;
+    /// concatenating the callback values yields the complete response.
     /// This method blocks until streaming is complete.
     ///
     /// Note: The callback may be invoked from a non-main thread.
@@ -380,7 +381,7 @@ impl Session {
     ///     options: Optional generation options.
     ///
     /// Raises:
-    ///     `GenerationError`: If streaming fails.
+    ///     `GenerationError`: If streaming fails or is cancelled.
     #[pyo3(signature = (prompt, on_chunk, options=None))]
     #[allow(clippy::needless_pass_by_value)]
     fn stream_response(
@@ -478,7 +479,8 @@ impl Session {
 
     /// Streams a structured JSON response.
     ///
-    /// The `on_chunk` callback receives partial JSON as it's generated.
+    /// The `on_chunk` callback receives the cumulative partial JSON generated
+    /// so far, not an incremental delta.
     /// Note that partial chunks may not be valid JSON until streaming completes.
     ///
     /// Args:
@@ -488,7 +490,7 @@ impl Session {
     ///     options: Optional generation options.
     ///
     /// Raises:
-    ///     `GenerationError`: If streaming fails.
+    ///     `GenerationError`: If streaming fails or is cancelled.
     #[pyo3(signature = (prompt, schema, on_chunk, options=None))]
     #[allow(clippy::needless_pass_by_value)]
     fn stream_json(
