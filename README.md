@@ -30,14 +30,14 @@ the build SDK and guarded at runtime.
 
 ```toml
 [dependencies]
-fm-rs = "0.2"
+fm-rs = "0.3"
 ```
 
 Enable the derive macro if you want compile-time schema generation:
 
 ```toml
 [dependencies]
-fm-rs = { version = "0.2", features = ["derive"] }
+fm-rs = { version = "0.3", features = ["derive"] }
 ```
 
 ## Quick Start
@@ -73,6 +73,7 @@ fn main() -> Result<(), fm_rs::Error> {
 - Multimodal image attachments and built-in OCR/barcode/Spotlight tools (27+)
 - Typed Foundation Models error taxonomy on blocking and streaming paths
 - Prewarming and timeout-aware respond APIs
+- Session-wide cancellation handles for blocking and streaming generation
 - Private Cloud Compute sessions on macOS/iOS/iPadOS 27+
 
 ## Private Cloud Compute (27+)
@@ -90,7 +91,7 @@ App ID has Apple's managed entitlement:
 
 ```toml
 [dependencies]
-fm-rs = { version = "0.2", features = ["private-cloud-compute"] }
+fm-rs = { version = "0.3", features = ["private-cloud-compute"] }
 ```
 
 ```rust
@@ -223,7 +224,7 @@ Failures surface as typed errors on both blocking and streaming paths:
 `ContextSizeExceeded`, `RateLimited`, `GuardrailViolation`, `Refusal`,
 `UnsupportedCapability`, `UnsupportedTranscriptContent`,
 `UnsupportedGenerationGuide`, `UnsupportedLanguageOrLocale`,
-`AssetsUnavailable`, `ConcurrentRequests`, and `Timeout`. Sessions also
+`AssetsUnavailable`, `ConcurrentRequests`, `Cancelled`, and `Timeout`. Sessions also
 support transcript replacement (`Session::set_transcript`) and
 `TranscriptErrorHandlingPolicy`.
 
@@ -256,6 +257,9 @@ support transcript replacement (`Session::set_transcript`) and
 ## Runtime Notes (macOS)
 
 - FFI calls are synchronous. Use `spawn_blocking` in async runtimes.
+- `Session::cancellation_handle()` can cancel an in-flight blocking or
+  streaming generation from another thread. Handles are session-scoped and
+  target whichever generation is active when `cancel()` is called.
 - macOS 27 built-in-tool schema overflows are classified as `ContextSizeExceeded`
   on blocking and streaming paths, including the runtime's private bridged error.
 - Cargo consumers do not need to add Swift runtime rpaths to their binary

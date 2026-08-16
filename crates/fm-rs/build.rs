@@ -96,8 +96,8 @@ fn compile_swift(
     ];
     // Match the Cargo profile: without this the FFI layer (JSON codecs,
     // transcript encoding) ships at -Onone even in release builds.
-    if env::var("OPT_LEVEL").is_ok_and(|level| level != "0") {
-        args.push("-O".to_string());
+    if let Some(flag) = swift_optimization_flag(env::var("OPT_LEVEL").ok().as_deref()) {
+        args.push(flag.to_string());
     }
     if let Some(sdk) = sdk_path {
         args.extend(["-sdk".to_string(), sdk]);
@@ -115,6 +115,14 @@ fn compile_swift(
         Ok(())
     } else {
         Err(format!("Swift compilation failed with status: {status}").into())
+    }
+}
+
+fn swift_optimization_flag(opt_level: Option<&str>) -> Option<&'static str> {
+    match opt_level {
+        Some("s" | "z") => Some("-Osize"),
+        Some("0") | None => None,
+        Some(_) => Some("-O"),
     }
 }
 

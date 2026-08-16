@@ -192,10 +192,9 @@ pub struct TokenUsage {
 impl SystemLanguageModel {
     /// Creates the default system language model.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the model cannot be created or if `FoundationModels`
-    /// is not available on the device.
+    /// Construction does not check whether the model is currently available;
+    /// call [`ensure_available`](Self::ensure_available) when availability is
+    /// required before creating a session.
     pub fn new() -> Result<Self> {
         let mut error: SwiftPtr = ptr::null_mut();
 
