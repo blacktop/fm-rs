@@ -638,19 +638,22 @@ private func buildArgumentsJson(
 ) -> String {
     var dict: [String: Any] = [:]
     for arg in arguments {
-        if stringProperties.contains(arg.name) {
+        // The model may pad names with whitespace; match schema property
+        // names the same way tool names are matched (trimmed).
+        let name = arg.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if stringProperties.contains(name) {
             // The schema declares this property as a string; parsing the value
             // as a JSON fragment would coerce "90210" to a number or "true" to
             // a boolean. Only unwrap an explicitly quoted JSON string.
-            if arg.value.hasPrefix("\""), let parsed = parseJsonFragment(arg.value) as? String {
-                dict[arg.name] = parsed
+            if let parsed = parseJsonFragment(arg.value) as? String {
+                dict[name] = parsed
             } else {
-                dict[arg.name] = arg.value
+                dict[name] = arg.value
             }
         } else if let parsed = parseJsonFragment(arg.value) {
-            dict[arg.name] = parsed
+            dict[name] = parsed
         } else {
-            dict[arg.name] = arg.value
+            dict[name] = arg.value
         }
     }
 
@@ -694,6 +697,71 @@ private func requiredPropertyNames(inSchemaJson schemaJson: String) -> [String] 
 private func parseJsonFragment(_ text: String) -> Any? {
     guard let data = text.data(using: .utf8) else { return nil }
     return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+}
+
+/// Returns the byte-level suffix of a cumulative snapshot.
+///
+/// Swift `Character` boundaries can change when a later snapshot extends the
+/// final grapheme (for example, `"e"` followed by `"e\u{301}"`). UTF-8
+/// boundaries remain stable for that append-only case.
+private func incrementalSuffix(of content: String, after previous: String) -> String? {
+    guard content.utf8.starts(with: previous.utf8) else { return nil }
+    return String(
+        decoding: content.utf8.dropFirst(previous.utf8.count),
+        as: UTF8.self
+    )
+}
+
+/// Owns a tool-call continuation so task cancellation and the blocking Rust
+/// callback can race without double-resuming it.
+private final class ToolCallContinuationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String, Error>?
+    private var isCancelled = false
+    private var isCompleted = false
+
+    /// Installs the continuation, returning false when cancellation won the race.
+    func install(_ continuation: CheckedContinuation<String, Error>) -> Bool {
+        lock.lock()
+        if isCancelled || isCompleted {
+            isCompleted = true
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func resume(with result: Result<String, Error>) {
+        lock.lock()
+        guard !isCompleted, let continuation else {
+            lock.unlock()
+            return
+        }
+        isCompleted = true
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !isCompleted else {
+            lock.unlock()
+            return
+        }
+        isCancelled = true
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        isCompleted = true
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(throwing: CancellationError())
+    }
 }
 
 /// A bridge tool that dispatches to Rust-defined tools.
@@ -758,7 +826,9 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
         // The model sometimes omits required arguments; feed the omission back
         // as the tool output so it can retry with the full set instead of the
         // tool silently running on defaults.
-        let provided = Set(arguments.arguments.map(\.name))
+        let provided = Set(
+            arguments.arguments.map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
         let missing = (requiredPropertiesByTool[toolName] ?? []).filter { !provided.contains($0) }
         if !missing.isEmpty {
             return """
@@ -775,16 +845,26 @@ final class GenericToolBridge: Tool, @unchecked Sendable {
         // thread so it cannot starve the cooperative pool (a Rust tool that
         // re-enters this library needs a pool thread to make progress).
         let dispatcher = self.dispatcher
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    continuation.resume(
-                        returning: try dispatcher.callTool(name: toolName, argumentsJson: argsJson)
-                    )
-                } catch {
-                    continuation.resume(throwing: error)
+        let continuationState = ToolCallContinuationState()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard continuationState.install(continuation) else { return }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result: Result<String, Error>
+                    do {
+                        result = .success(
+                            try dispatcher.callTool(name: toolName, argumentsJson: argsJson)
+                        )
+                    } catch {
+                        result = .failure(error)
+                    }
+                    continuationState.resume(with: result)
                 }
             }
+        } onCancel: {
+            // The synchronous Rust callback cannot be forcibly stopped, but
+            // the generation must not remain suspended waiting for it.
+            continuationState.cancel()
         }
     }
 }
@@ -841,6 +921,16 @@ final class SessionState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         currentTask = task
+    }
+
+    /// Claims successful completion before a concurrent cancellation can
+    /// target the task. Returns false when cancellation already won the race.
+    func finishCurrentTask() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let task = currentTask else { return false }
+        currentTask = nil
+        return !task.isCancelled
     }
 
     /// Creates a detached task and registers it while holding the lock, so a
@@ -1106,8 +1196,8 @@ public func fm_session_stream(
             for try await partialResponse in stream {
                 let content = partialResponse.content
                 let delta: String
-                if content.hasPrefix(emittedContent) {
-                    delta = String(content.dropFirst(emittedContent.count))
+                if let suffix = incrementalSuffix(of: content, after: emittedContent) {
+                    delta = suffix
                 } else {
                     // The snapshot was rewritten rather than extended; emit it
                     // whole rather than losing the revision.
@@ -1138,15 +1228,14 @@ public func fm_session_stream(
                 }
             }
 
-            // A cancelled stream can end cleanly instead of throwing; report
-            // that as cancellation, not as successful completion.
+            let completed = state.finishCurrentTask()
             callbackQueue.sync {
-                if Task.isCancelled {
+                if completed {
+                    callbacks.onDone(callbacks.userData)
+                } else {
                     "Cancelled".withCString { ptr in
                         callbacks.onError(callbacks.userData, FFIErrorCode.cancelled.rawValue, ptr)
                     }
-                } else {
-                    callbacks.onDone(callbacks.userData)
                 }
             }
         } catch {
@@ -1457,15 +1546,14 @@ public func fm_session_stream_json(
                 }
             }
 
-            // A cancelled stream can end cleanly instead of throwing; report
-            // that as cancellation, not as successful completion.
+            let completed = state.finishCurrentTask()
             callbackQueue.sync {
-                if Task.isCancelled {
+                if completed {
+                    callbacks.onDone(callbacks.userData)
+                } else {
                     "Cancelled".withCString { ptr in
                         callbacks.onError(callbacks.userData, FFIErrorCode.cancelled.rawValue, ptr)
                     }
-                } else {
-                    callbacks.onDone(callbacks.userData)
                 }
             }
         } catch {
