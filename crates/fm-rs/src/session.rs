@@ -101,6 +101,10 @@ impl std::fmt::Display for Response {
 /// A session maintains state between requests, allowing for multi-turn conversations.
 /// You can reuse the same session for multiple prompts or create a new one each time.
 ///
+/// Dropping a session requests cooperative cancellation. A Rust tool callback
+/// that is already queued or running may continue until it returns; its
+/// dispatcher-owned callback context remains valid for that duration.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -620,6 +624,7 @@ impl Session {
 
         // Create callback state
         let state = Box::new(StreamState {
+            session_ptr: self.ptr,
             on_chunk: Mutex::new(Box::new(on_chunk)),
             error: Mutex::new(None),
         });
@@ -841,6 +846,10 @@ impl Session {
     ///
     /// The handle holds its own reference to the underlying Swift session, so
     /// it remains safe to use (as a no-op) after the `Session` is dropped.
+    /// It is session-scoped rather than generation-scoped: [`cancel`](CancellationHandle::cancel)
+    /// targets whichever generation is in flight when it is called. A delayed
+    /// call intended for an earlier generation can therefore cancel a later
+    /// one; coordinate its lifetime with the operation it is meant to cancel.
     ///
     /// # Example
     ///
@@ -1217,6 +1226,7 @@ impl Session {
 
         // Create callback state
         let state = Box::new(StreamState {
+            session_ptr: self.ptr,
             on_chunk: Mutex::new(Box::new(on_chunk)),
             error: Mutex::new(None),
         });
@@ -1271,7 +1281,9 @@ unsafe impl Send for Session {}
 ///
 /// Created via [`Session::cancellation_handle`]. Holds its own reference to
 /// the Swift session, so it may outlive the `Session`; cancelling after the
-/// session is gone is a no-op.
+/// session is gone is a no-op. The handle is session-scoped, so a delayed
+/// cancellation targets whichever generation is active at call time, not
+/// necessarily the generation that was active when the handle was created.
 pub struct CancellationHandle {
     ptr: NonNull<c_void>,
 }
@@ -1281,7 +1293,9 @@ impl CancellationHandle {
     ///
     /// Covers blocking (`respond*`) and streaming calls alike; a cancelled
     /// call returns [`Error::Cancelled`]. Cancellation is cooperative, so the
-    /// framework may finish a small amount of work before observing it.
+    /// framework may finish a small amount of work before observing it. This
+    /// targets the current generation at call time; discard or otherwise
+    /// coordinate stale handles before starting a later generation.
     pub fn cancel(&self) {
         unsafe { ffi::fm_session_cancel(self.ptr.as_ptr()) };
     }
@@ -1520,6 +1534,7 @@ pub enum TranscriptErrorHandlingPolicy {
 
 /// Internal state for streaming callbacks.
 struct StreamState<'a> {
+    session_ptr: NonNull<c_void>,
     on_chunk: Mutex<Box<ChunkCallbackFn<'a>>>,
     error: Mutex<Option<(c_int, String)>>,
 }
@@ -1549,6 +1564,11 @@ extern "C" fn stream_chunk_callback(user_data: *mut c_void, chunk: *const c_char
             "Stream chunk callback panicked".to_string(),
         ));
     }
+    if panicked {
+        // Stop generation promptly; the error callback below preserves the
+        // more specific callback-panic error already recorded above.
+        unsafe { ffi::fm_session_cancel(state.session_ptr.as_ptr()) };
+    }
 }
 
 /// Callback invoked when streaming is done.
@@ -1570,7 +1590,7 @@ extern "C" fn stream_error_callback(user_data: *mut c_void, code: c_int, message
     };
 
     if let Ok(mut error) = state.error.lock() {
-        *error = Some((code, msg));
+        error.get_or_insert((code, msg));
     }
 }
 
@@ -1753,12 +1773,16 @@ fn autoclose_json(input: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::{CString, c_void};
+    use std::ptr::NonNull;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use crate::error::Error;
     use crate::session::{
-        Attachment, Response, SessionUsage, SystemTool, attachment_specs, json_timeout_millis,
-        session_usage_from_json, system_tools_json, timeout_millis,
+        Attachment, Response, SessionUsage, StreamState, SystemTool, attachment_specs,
+        json_timeout_millis, session_usage_from_json, stream_error_callback, system_tools_json,
+        timeout_millis,
     };
 
     #[test]
@@ -1768,6 +1792,31 @@ mod tests {
         assert_eq!(response.as_ref(), "Hello, world!");
         assert_eq!(format!("{response}"), "Hello, world!");
         assert_eq!(response.into_content(), "Hello, world!");
+    }
+
+    #[test]
+    fn stream_error_callback_preserves_an_existing_callback_error() {
+        let mut state = StreamState {
+            session_ptr: NonNull::dangling(),
+            on_chunk: Mutex::new(Box::new(|_: &str| {})),
+            error: Mutex::new(Some((
+                crate::ffi::ErrorCode::Unknown as i32,
+                "Stream chunk callback panicked".to_string(),
+            ))),
+        };
+        let message = CString::new("Cancelled").expect("literal has no NUL");
+
+        stream_error_callback(
+            std::ptr::from_mut(&mut state).cast::<c_void>(),
+            crate::ffi::ErrorCode::Cancelled as i32,
+            message.as_ptr(),
+        );
+
+        let error = state.error.lock().expect("stream error mutex should lock");
+        assert_eq!(
+            error.as_ref().map(|(_, message)| message.as_str()),
+            Some("Stream chunk callback panicked")
+        );
     }
 
     #[test]
