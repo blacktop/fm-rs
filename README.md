@@ -72,6 +72,7 @@ fn main() -> Result<(), fm_rs::Error> {
 - Model-reported context sizes and exact session token usage (27+)
 - Multimodal image attachments and built-in OCR/barcode/Spotlight tools (27+)
 - Typed Foundation Models error taxonomy on blocking and streaming paths
+- Guardrail selection, including permissive guardrails for transforming user content
 - Prewarming and timeout-aware respond APIs
 - Session-wide cancellation handles for blocking and streaming generation
 - Private Cloud Compute sessions on macOS/iOS/iPadOS 27+

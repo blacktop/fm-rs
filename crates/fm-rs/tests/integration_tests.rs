@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use fm_rs::{
-    CancellationHandle, Error, GenerationOptions, ModelAvailability, Session, SystemLanguageModel,
-    SystemTool,
+    CancellationHandle, Error, GenerationOptions, Guardrails, ModelAvailability, Session,
+    SystemLanguageModel, SystemTool,
 };
 
 const CANCELLATION_PROMPT: &str =
@@ -70,6 +70,34 @@ fn test_simple_prompt() {
     let options = GenerationOptions::default();
     let response = session
         .respond("Say 'Hello, world!' and nothing else.", &options)
+        .expect("Failed to get response");
+
+    assert!(!response.content().is_empty());
+    println!("Response: {}", response.content());
+}
+
+#[test]
+#[ignore = "Requires Apple Intelligence to be enabled"]
+fn test_permissive_guardrails_transform_user_content() {
+    let model = SystemLanguageModel::with_guardrails(Guardrails::PermissiveContentTransformations)
+        .expect("Failed to create model");
+
+    if !model.is_available() {
+        println!("Skipping test: Model not available");
+        return;
+    }
+
+    // The default guardrails intermittently refuse this message as unsafe.
+    let session = Session::with_instructions(
+        &model,
+        "Translate the text inside <text> tags into French. Reply with the translation only.",
+    )
+    .expect("Failed to create session");
+    let response = session
+        .respond(
+            "<text>Can you pick up the kids at 5? I'm stuck at work.</text>",
+            &GenerationOptions::default(),
+        )
         .expect("Failed to get response");
 
     assert!(!response.content().is_empty());

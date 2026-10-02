@@ -34,6 +34,10 @@ unsafe extern "C" {
     /// check availability separately via `fm_model_availability`.
     pub fn fm_model_default(error_out: *mut SwiftPtr) -> SwiftPtr;
 
+    /// Creates a `SystemLanguageModel` with the given guardrails code
+    /// (see [`crate::Guardrails`]). Same contract as `fm_model_default`.
+    pub fn fm_model_with_guardrails(guardrails: c_int, error_out: *mut SwiftPtr) -> SwiftPtr;
+
     /// Creates a Foundation Models 27 `PrivateCloudComputeLanguageModel`.
     /// Returns null and sets `error_out` on pre-27 SDKs or runtimes.
     #[cfg(feature = "private-cloud-compute")]

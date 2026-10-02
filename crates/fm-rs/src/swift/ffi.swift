@@ -297,9 +297,8 @@ private func systemModelAvailabilityCode(_ model: SystemLanguageModel) -> Int32 
     }
 }
 
-private func makeSystemLanguageModelBox() -> LanguageModelBox {
-    let model = SystemLanguageModel.default
-    return LanguageModelBox(
+private func makeSystemLanguageModelBox(_ model: SystemLanguageModel = .default) -> LanguageModelBox {
+    LanguageModelBox(
         systemModel: model,
         isAvailable: { model.isAvailable },
         availability: { systemModelAvailabilityCode(model) },
@@ -319,6 +318,20 @@ public func fm_model_default(_ errorOut: UnsafeMutablePointer<UnsafeMutableRawPo
     _ = errorOut
     let model = makeSystemLanguageModelBox()
     return Unmanaged.passRetained(model as AnyObject).toOpaque()
+}
+
+/// Creates a SystemLanguageModel with the given guardrails:
+/// 0 = default, 1 = permissive content transformations.
+@_cdecl("fm_model_with_guardrails")
+public func fm_model_with_guardrails(
+    _ guardrails: Int32,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutableRawPointer?>?
+) -> UnsafeMutableRawPointer? {
+    _ = errorOut
+    let model = SystemLanguageModel(
+        guardrails: guardrails == 1 ? .permissiveContentTransformations : .default
+    )
+    return Unmanaged.passRetained(makeSystemLanguageModelBox(model) as AnyObject).toOpaque()
 }
 
 /// Checks if the model is available.

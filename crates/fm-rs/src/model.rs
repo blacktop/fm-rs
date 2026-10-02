@@ -66,6 +66,30 @@ impl From<AvailabilityCode> for ModelAvailability {
     }
 }
 
+/// Safety guardrails applied to a [`SystemLanguageModel`].
+///
+/// Mirrors `SystemLanguageModel.Guardrails`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Guardrails {
+    /// The framework's default guardrails.
+    #[default]
+    Default,
+    /// Guardrails for transforming content the user supplied, such as
+    /// translating, rewriting or summarizing it. They block less of the
+    /// input than [`Guardrails::Default`].
+    PermissiveContentTransformations,
+}
+
+impl Guardrails {
+    pub(crate) fn ffi_code(self) -> std::ffi::c_int {
+        match self {
+            Guardrails::Default => 0,
+            Guardrails::PermissiveContentTransformations => 1,
+        }
+    }
+}
+
 mod private {
     pub trait Sealed {}
 }
@@ -199,6 +223,28 @@ impl SystemLanguageModel {
         let mut error: SwiftPtr = ptr::null_mut();
 
         let ptr = unsafe { ffi::fm_model_default(&raw mut error) };
+
+        ModelHandle::from_ffi(ptr, error, "SystemLanguageModel").map(|handle| Self { handle })
+    }
+
+    /// Creates the system language model with the given guardrails.
+    ///
+    /// Use [`Guardrails::PermissiveContentTransformations`] when the prompt
+    /// carries user content to transform, such as text to translate or
+    /// rewrite, which the default guardrails can refuse. Like
+    /// [`new`](Self::new), construction does not check availability.
+    ///
+    /// ```rust,no_run
+    /// use fm_rs::{Guardrails, SystemLanguageModel};
+    ///
+    /// let model = SystemLanguageModel::with_guardrails(Guardrails::PermissiveContentTransformations)?;
+    /// model.ensure_available()?;
+    /// # Ok::<(), fm_rs::Error>(())
+    /// ```
+    pub fn with_guardrails(guardrails: Guardrails) -> Result<Self> {
+        let mut error: SwiftPtr = ptr::null_mut();
+
+        let ptr = unsafe { ffi::fm_model_with_guardrails(guardrails.ffi_code(), &raw mut error) };
 
         ModelHandle::from_ffi(ptr, error, "SystemLanguageModel").map(|handle| Self { handle })
     }
@@ -629,9 +675,16 @@ mod tests {
 
     use crate::error::Error;
     use crate::ffi::{AvailabilityCode, ErrorCode};
-    use crate::model::{ModelAvailability, error_from_parts, token_usage_from_raw};
+    use crate::model::{Guardrails, ModelAvailability, error_from_parts, token_usage_from_raw};
     #[cfg(feature = "private-cloud-compute")]
     use crate::model::{QuotaStatus, quota_usage_from_json, unix_seconds_to_system_time};
+
+    #[test]
+    fn guardrails_should_map_to_swift_codes() {
+        assert_eq!(Guardrails::default(), Guardrails::Default);
+        assert_eq!(Guardrails::Default.ffi_code(), 0);
+        assert_eq!(Guardrails::PermissiveContentTransformations.ffi_code(), 1);
+    }
 
     #[cfg(feature = "private-cloud-compute")]
     #[test]
